@@ -153,15 +153,25 @@ def pseudorap(Theta):
         tmp.append(hlp)
     return tmp
 
-def dR(phi_lepton,phi_jets,rap_lepton,rap_jets,jet_energy,lepton_energy):
+def leading_lep(lepton_energy,jet_energy,dr_bool,E_lepjet):
+    tmp = []
+    lepjet = jet_energy[dr_bool] #all jets which overlap with a semileptonic candidate
+    if len(lepjet)==1:
+        return ((lepton_energy/lepjet[0])>E_lepjet)
+    else:
+        for i in range(len(lepjet)):
+            tmp.append((lepton_energy/lepjet[i])>E_lepjet)
+        return all(tmp) #only return true (i.e. the lepton is the leading particle inside a jet) if the lepton is leading in all jets with whom it overlaps
+
+def dR(phi_lepton,phi_jets,rap_lepton,rap_jets,jet_energy,lepton_energy,E_lepjet):
     tmp = []
     for j in range(len(phi_lepton)):
         dr_bool = []
         for k in range(len(phi_jets)):
             dr = np.sqrt((phi_lepton[j]-phi_jets[k])**2+(rap_lepton[j]-rap_jets[k])**2)
             dr_bool.append(dr<0.4)
-        if len(jet_energy[dr_bool])!=0:
-            tmp.append((sum(dr_bool) == 0)|(lepton_energy[j]/(jet_energy[dr_bool][0]) > 0.5))
+        if sum(dr_bool)!=0:
+            tmp.append(False|leading_lep(lepton_energy[j],jet_energy,dr_bool,E_lepjet))
         else:
             tmp.append(True) #if dr_bool contains only False,i.e. len(jet_energy[dr_bool])=0, then we directly know that the lepton is isolated from all jets with dR>0.4
     return tmp
@@ -180,9 +190,9 @@ def cut4(input_df,jet_algo):
     phi_muon, rap_muon, muon_energy = df_mu["muon_phi"],df_mu["muon_eta"],df_mu["muon_energy"]
     phi_jet, rap_jet, jet_energy = df["jet_{}_phi".format(jet_algo)],df["jet_{}_eta".format(jet_algo)],df["jet_{}_energy".format(jet_algo)]
     for i,index in enumerate(df_mu.index):
-        mask_muon.append(dR(phi_muon[index],phi_jet[index],rap_muon[index],rap_jet[index],jet_energy[index],muon_energy[index]))
+        mask_muon.append(dR(phi_muon[index],phi_jet[index],rap_muon[index],rap_jet[index],jet_energy[index],muon_energy[index],0.5))
     for i,index in enumerate(df_e.index):
-        mask_electron.append(dR(phi_electron[index],phi_jet[index],rap_electron[index],rap_jet[index],jet_energy[index],electron_energy[index]))
+        mask_electron.append(dR(phi_electron[index],phi_jet[index],rap_electron[index],rap_jet[index],jet_energy[index],electron_energy[index],0.5))
     df_mu["cut4_muon"] = pd.Series(data=mask_muon,index=df_mu.index)
     df_e["cut4_electron"] = pd.Series(data=mask_electron,index=df_e.index)
     df["cut4_muon"] = pd.Series(data=df_mu["cut4_muon"],index=df.index).fillna(False)
@@ -243,30 +253,49 @@ def cut5(input_df):
     print("---cut5 applied!---")
     return df
 
-#cut6: at least one muon with p>15 GeV per event or electron with p>20 GeV
-def cut6(input_df):
-    print("---Applying cut6: Require at least one muon(electron) with p>15(20) GeV per event---")
+#cut6: lower cut on highest energy lepton 
+def max_arr(arr):
+    if len(arr)==0:
+         return 0
+    else:
+        return ak.max(arr)
+
+def cut6(input_df,cut_l,comparison):
     df = input_df.copy()
     df["p_muon"] = np.sqrt(df["muon_px"]**2+df["muon_py"]**2+df["muon_pz"]**2)
     df["p_electron"] = np.sqrt(df["electron_px"]**2+df["electron_py"]**2+df["electron_pz"]**2)
-    df["cut6_muon"] = df["p_muon"].apply(lambda row: any(val > 15 for val in row))
-    df["cut6_electron"] = df["p_electron"].apply(lambda row: any(val > 20 for val in row))
+    if comparison == ">":
+        print("---Applying cut6: lower cut on highest energy lepton with p > {} GeV---".format(cut_l))
+        df["cut6_muon"] = df["p_muon"].apply(lambda row: max_arr(row)>cut_l)
+        df["cut6_electron"] = df["p_electron"].apply(lambda row: max_arr(row)>cut_l)
+    elif comparison == "<":
+        print("---Applying cut6: upper cut on highest energy lepton with p < {} GeV---".format(cut_l))
+        df["cut6_muon"] = df["p_muon"].apply(lambda row: max_arr(row) < cut_l)
+        df["cut6_electron"] = df["p_electron"].apply(lambda row: max_arr(row) < cut_l)
+    else: 
+        raise ValueError("Invalid comparison operator")
     df["cut6"] = df["cut6_muon"] | df["cut6_electron"]
     print("---cut6 applied!---")
     return df
 
-#cut7: Exactly one muon with p>15 GeV or electron with p>20 GeV per event
-def cut7(input_df):
-    print("---Applying cut7: Exactly one muon(electron) with p>15(20) GeV per event---")
+#cut7: inverse W mass cut: Compare chi2 values for all semileptonic candidates in each event
+def BW_resonance(E,a,E_0):
+    return a/(a**2/4+(E-E_0)**2)
+
+def mass_W(E_l,E_nu,px_l,py_l,pz_l,px_nu,py_nu,pz_nu):
+    tmp = []
+    for i in range(len(E_l)):
+        tmp.append(2*(E_l[i]*E_nu+px_l[i]*px_nu+py_l[i]*py_nu+pz_l[i]*pz_nu))
+    return tmp
+        
+def m_W_lep(input_df):
     df = input_df.copy()
-    mask = []
-    df["pT_muon"] = np.sqrt(df["muon_px"]**2+df["muon_py"]**2)
-    df["pT_electron"] = np.sqrt(df["electron_px"]**2+df["electron_py"]**2)
-    df["cut7_muon"] = df[["n_muons","p_muon"]].apply(lambda row: all(val>15 for val in row["p_muon"]) & row["n_muons"]==1,axis=1)
-    df["cut7_electron"] = df[["n_electrons","p_electron"]].apply(lambda row: all(val>20 for val in row["p_electron"]) & row["n_electrons"]==1,axis=1)
-    df["cut7"] = df["cut7_muon"] | df["cut7_electron"] 
-    print("---cut7 applied---")
-    return df
+    df["m_W_electron"] = df[["Emiss","Emiss_px","Emiss_py","Emiss_pz","electron_energy","electron_px","electron_py","electron_pz"]].apply(lambda row: mass_W(row["electron_energy"],row["Emiss"],row["electron_px"],row["electron_py"],row["electron_pz"],row["Emiss_py"],row["Emiss_py"],row["Emiss_pz"]),axis=1)
+    df["m_W_muon"] = df[["Emiss","Emiss_px","Emiss_py","Emiss_pz","muon_energy","muon_px","muon_py","muon_pz"]].apply(lambda row: mass_W(row["muon_energy"],row["Emiss"],row["muon_px"],row["muon_py"],row["muon_pz"],row["Emiss_py"],row["Emiss_py"],row["Emiss_pz"]),axis=1)
+    m_W_electron = np.array(ak.flatten(df["m_W_electron"]))
+    m_W_muon = np.array(ak.flatten(df["m_W_muon"]))
+    return m_W_electron + m_W_muon
+
 
 #Apply the cuts to the df
 def cut_flow(df,jet_algo):
@@ -301,7 +330,7 @@ def cut_flow(df,jet_algo):
 
 def lxcosTheta(df):
     s = 365**2 #square of centre of mass energy in GeV
-    m_t = 173 #top mass in GeV
+    m_t = 173.34 #m_t in GeV (taken from literature)
     beta = np.sqrt(1-(4*m_t**2)/s) #top velocity
     c_0 = constants.speed_of_light
     #for electrons
