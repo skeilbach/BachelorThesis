@@ -262,57 +262,6 @@ def cut5(input_df):
     print("---cut5 applied!---")
     return df
 
-'''
-#cut5: Consider only leptons whose reconstructed tracks lie close to the PV -> d0 < 0.1 mm and d0signif = d_0/sqrt(d_0variance) < 50 (tbs if including z0 variable improves purity and efficiency of cut)
-def PV(d0,d0sig):
-    mask = []
-    for i,val in enumerate(d0):
-        mask.append((d0[i]<0.1)&(d0sig[i]<50))
-    return mask
-
-def PV_TP(arr1,arr2):
-    count_TP=0
-    for i,val in enumerate(arr1):
-        if(arr1[i] & arr2[i]):
-            count_TP += 1
-    return count_TP
-
-def PV_TN(arr1,arr2):
-    count_TN = 0
-    for i,val in enumerate(arr1):
-        if((arr1[i]==0)&(arr2[i]==0)):
-            count_TN += 1
-    return count_TN
-
-#this code checks the rate of true positives (TP) and true negatives (TN) and prints the sensitivity(prob. that PV is true when PV_truth=True)  and specificity (prob. that PV is false when PV_truth=False)of the PV cut
-def PV_check(df):
-    n_PVtrue_electrons = df["electron_IsPrimary_truth"].apply(lambda row: sum(row)).sum()+0.001 #add 0.001 to ensure that we dont divide by 0 if there isnt any true PV at all
-    n_PVtrue_muons = df["muon_IsPrimary_truth"].apply(lambda row: sum(row)).sum()+0.001
-    n_PVfalse_muons = df["n_muons"].sum() - n_PVtrue_muons
-    n_PVfalse_electrons = df["n_electrons"].sum() - n_PVtrue_electrons
-    n_TP_electrons= df[["electron_IsPrimary_truth","cut5_electron"]].apply(lambda row: PV_TP(row["electron_IsPrimary_truth"],row["cut5_electron"]),axis=1).sum()
-    n_TP_muons = df[["muon_IsPrimary_truth","cut5_muon"]].apply(lambda row: PV_TP(row["muon_IsPrimary_truth"],row["cut5_muon"]),axis=1).sum()
-    n_TN_electrons= df[["electron_IsPrimary_truth","cut5_electron"]].apply(lambda row: PV_TN(row["electron_IsPrimary_truth"],row["cut5_electron"]),axis=1).sum()
-    n_TN_muons = df[["muon_IsPrimary_truth","cut5_muon"]].apply(lambda row: PV_TN(row["muon_IsPrimary_truth"],row["cut5_muon"]),axis=1).sum()
-    table = [{"": "electrons", "TP": n_TP_electrons,"TP/P_total [%]": np.round(n_TP_electrons/n_PVtrue_electrons*100,2), "TN/N_total [%]": np.round(n_TN_electrons/n_PVfalse_electrons*100,2)},
-             {"": "muons", "TP": n_TP_muons, "TP/P_total [%]": np.round(n_TP_muons/n_PVtrue_muons*100,2), "TN/N_total [%]": np.round(n_TN_muons/n_PVfalse_muons*100,2)}]
-    print("---PV check successfull:---")
-    print(tabulate(table,headers="keys",tablefmt="grid"))
-
-def cut5(input_df):
-    print("---Applying cut5: PV criteria with d0&z0 < 0.1 mm and d0sig&z0sig < 50 ---")
-    df = input_df.copy()
-    mask_muon = [];mask_electron = []
-    for i,index in enumerate(df.index):
-        mask_muon.append(PV(df["muon_d0"][index],df["muon_d0signif"][index]))
-        mask_electron.append(PV(df["electron_d0"][index],df["electron_d0signif"][index]))
-    df["cut5_muon"] = pd.Series(data=mask_muon,index=df.index)
-    df["cut5_electron"] = pd.Series(data=mask_electron,index=df.index)
-    df["cut5"] = (df["cut5_muon"].apply(lambda row: any(row)))|(df["cut5_electron"].apply(lambda row: any(row))) #this tests if an event includes a lepton that fulfills the PV criterion which makes it a prime candidate for having originated from a semileptonic top decay. Thus it is assigned as a signal event 
-    print("---cut5 applied!---")
-    return df
-'''
-
 #cut7: inverse W mass cut: Compare chi2 values for all semileptonic candidates in each event
 def BW_resonance(E,a,E_0):
     return a/(a**2/4+(E-E_0)**2)
@@ -336,39 +285,60 @@ def m_W_lep(input_df):
 ###
 
 #calculate total amount of signal events to be able to calculate the efficiency(i.e. what percentage of total signal events have been kept) for each cut
+
+#requires the genElectron/genMuon to have the same charge as the W/t it originated from
+def Wcharge(genLepton_charge,genLepton_PDG,genW_charge):
+    mask= []
+    for i,val in enumerate(genLepton_PDG):
+        mask.append((val==(genW_charge*24))|(val==(genW_charge*6)))
+    return int((all(genLepton_charge[mask]==genW_charge))&(len(genLepton_charge[mask])!=0))
+
+
+def events_bruteforce(df,n_Wleptons):
+    Electron_Wminus,Electron_Wplus,Muon_Wminus,Muon_Wplus = [],[],[],[]
+    for i,index in enumerate(df.index):
+        Electron_Wplus.append(Wcharge(df["genElectron_charge"][index],df["genElectron_parentPDG"][index],1.0))
+        Electron_Wminus.append(Wcharge(df["genElectron_charge"][index],df["genElectron_parentPDG"][index],-1.0))
+        Muon_Wplus.append(Wcharge(df["genMuon_charge"][index],df["genMuon_parentPDG"][index],1.0))
+        Muon_Wminus.append(Wcharge(df["genMuon_charge"][index],df["genMuon_parentPDG"][index],-1.0))
+    Electron_Wminus = pd.Series(data=Electron_Wminus,index=df.index)==n_Wleptons
+    Electron_Wplus = pd.Series(data=Electron_Wplus,index=df.index)==n_Wleptons
+    Muon_Wminus = pd.Series(data=Muon_Wminus,index=df.index)==n_Wleptons
+    Muon_Wplus = pd.Series(data=Muon_Wplus,index=df.index)==n_Wleptons
+    return (sum(Electron_Wminus)+sum(Electron_Wplus)+sum(Muon_Wminus)+sum(Muon_Wplus))
+
+
 def events(df,n_Wleptons):
     Electron_Wplus = df["genElectron_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
-    Electron_Wminus = df["genElectron_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
     Muon_Wplus = df["genMuon_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
+    Electron_Wminus = df["genElectron_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
     Muon_Wminus = df["genMuon_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
-    Leptons_W = Electron_Wplus + Electron_Wminus + Muon_Wplus + Muon_Wminus
+    Leptons_W = Electron_Wplus + Muon_Wplus + Electron_Wminus + Muon_Wminus
     return sum(Leptons_W == n_Wleptons )
 
-#define signal significance and signal purity. In this context signal is referred to as an event containing a semileptonic top decay. Every other event (e.g. tt_hadhad) is assigned as background 
+
+#define signal significance and signal purity (both semileptonic top decays as well as allhadronic ones are considered "signal" -> distinguish eff and pur for semileptonic and hadronic events in the cut-flow tho!)
+ 
 #further, define uncertainties on efficiency and purity in the basis of the paper of Ullrich and Xu which calculates an uncertainty based on the binomially distributed values k which does not fail in the limits of k=0 or k=n. k_s hereby means the number of signal events after a cut and n_s refers to the total number of signal events prior to all cuts. The efficiency is calculated for signal events (tlepThad+thadTlep,tlepTlep) and for the all-hadronic thadThad channel that contributes to the background
 
 def eff_std(k_s,n_s):
     return np.sqrt(((k_s+1)*(k_s+2))/((n_s+2)*(n_s+3))-(k_s+1)**2/(n_s+2)**2)
 
-def pur_std(k_s,n):
-    return np.sqrt(((k_s+1)*(k_s+2))/((n+2)*(n+3))-(k_s+1)**2/(n+2)**2)
+def pur_std(k_s,k_b,n_s,n_b):
+    return np.sqrt(k_s**3/(k_s+k_b)**6 * (1-k_s/n_s)+k_s**2*k_b/(k_s+k_b)**4 * (1-k_b/n_b))
 
-#signal_eff_pur(cut_names,table_lephad,table_hadlep,table_hadhad,jet_algo,N_exp,N_SL,N_AH,BR_SL,BR_AH)
-
-def signal_eff_pur(cut_names,n_lephad,n_hadlep,n_hadhad,jet_algo,R_SL,R_AH):
+def signal_eff_pur(cut_names,n_lephad,n_hadlep,n_hadhad,jet_algo):
     table_SL,table_AH = [],[]
-    n_lephad,n_hadlep,n_hadhad = np.array(n_lephad),np.array(n_hadlep),np.array(n_hadhad)
-    #rescale MC entries
-    n_tot_SL,n_tot_AH = R_SL*(n_lephad[0]+n_hadlep[0]), R_AH*n_hadhad[0] #total number of events before all cuts
-    k_SL,k_AH = R_SL*(n_lephad[1:]+n_hadlep[1:]),R_AH*n_hadhad[1:] #number of events after each cut
+    n_tot_SL,n_tot_AH = n_lephad[0]+n_hadlep[0],n_hadhad[0] #total number of events before all cuts
+    k_SL,k_AH = n_lephad[1:]+n_hadlep[1:],n_hadhad[1:] #number of events after each cut
     k = k_SL + k_AH
     for i,cut_name in enumerate(cut_names):
         dic_SL, dic_AH = {}, {}
         dic_SL["tT semileptonic"],dic_AH["tT all-hadronic"] = cut_name, cut_name
-        dic_SL[r"$\epsilon$ [%]"], dic_AH[r"$\epsilon$ [%]"] = np.round((k_SL[i]/n_tot_SL)*100,3),np.round((k_AH[i]/n_tot_AH)*100,3)
-        dic_SL[r"$\sigma_{\epsilon}$ [%]"],dic_AH[r"$\sigma_{\epsilon}$ [%]"] = np.round(eff_std(k_SL[i],n_tot_SL)*100,3),np.round(eff_std(k_AH[i],n_tot_AH)*100,3)
-        dic_SL[r"$\pi$ [%]"], dic_AH[r"$\pi$ [%]"] = np.round((k_SL[i]/k[i])*100,3),np.round((k_AH[i]/k[i])*100,3)
-        dic_SL[r"$\sigma_{\pi}$ [%]"],dic_AH[r"$\sigma_{\pi}$ [%]"] = np.round(pur_std(k_SL[i],k[i])*100,3),np.round(pur_std(k_AH[i],k[i])*100,3)
+        dic_SL[r"$\epsilon$ [%]"], dic_AH[r"$\epsilon$ [%]"] = np.round((k_SL[i]/n_tot_SL)*100,5),np.round((k_AH[i]/n_tot_AH)*100,5)
+        dic_SL[r"$\sigma_{\epsilon}$ [%]"],dic_AH[r"$\sigma_{\epsilon}$ [%]"] = np.round(eff_std(k_SL[i],n_tot_SL)*100,5),np.round(eff_std(k_AH[i],n_tot_AH)*100,5)
+        dic_SL[r"$\pi$ [%]"], dic_AH[r"$\pi$ [%]"] = np.round((k_SL[i]/k[i])*100,5),np.round((k_AH[i]/k[i])*100,5)
+        dic_SL[r"$\sigma_{\pi}$ [%]"],dic_AH[r"$\sigma_{\pi}$ [%]"] = np.round(pur_std(k_SL[i],k_AH[i],n_tot_SL,n_tot_AH)*100,5),np.round(pur_std(k_AH[i],k_SL[i],n_tot_AH,n_tot_SL)*100,5)
         table_SL.append(dic_SL)
         table_AH.append(dic_AH)
     print("---Using jet_{} as jet_algo---".format(jet_algo))
@@ -378,8 +348,8 @@ def signal_eff_pur(cut_names,n_lephad,n_hadlep,n_hadhad,jet_algo,R_SL,R_AH):
     print(tabulate(table_AH,headers="keys",tablefmt="grid"))
     return table_SL,table_AH
 
-#Define cut-flow
-def cut_flow(df,jet_algo,decay_channel):
+#Define cut-flow -> specify decay channel (because cut flow is applied to tlepThad,thadTlep and thadThad respectively)  -> apply cut flow to df iteratively and calculate number of allhadronic/semileptonic events that remain after each cut to later calculate eff and pur with these numbers
+def cut_flow(df,jet_algo,decay_channel,R):
     table_s = []
     if (decay_channel=="semileptonic"):
         n_Wleptons = 1
@@ -396,7 +366,7 @@ def cut_flow(df,jet_algo,decay_channel):
     table_s.append(events(df,n_Wleptons))
     df = cut5(df)
     table_s.append(events(df,n_Wleptons))
-    return df,table_s
+    return df,R*np.array(table_s)
 
 ###
 # apply filters and leptons

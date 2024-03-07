@@ -11,6 +11,7 @@ from iminuit import minimize
 from matplotlib.patches import Rectangle
 from cut_flow_functions import cut_flow,lxcosTheta,LxcosTheta,signal_eff_pur,events
 from pathlib import Path
+from sample_norms import N_expect
 from argparse import Namespace
 '''
 This code analyses the (x,cos(Theta)) distribution of muons originating from semileptonic decay of the t quark.
@@ -20,15 +21,17 @@ Event selection cuts are applied to the data try to minimise background events e
 #Import data
 ###
 
+#specify BSM modification
+BSM_mod = "" #"" for no modification,i.e. SM coupling
+
 #import ntuples and specify jet algo
-path_tlepThad = "/home/skeilbach/FCCee_topEWK/ee_SM_tt_tlepThad.pkl"
-path_thadTlep = "/home/skeilbach/FCCee_topEWK/ee_SM_tt_thadTlep.pkl"
-path_thadThad = "/home/skeilbach/FCCee_topEWK/ee_SM_tt_thadThad.pkl"
+path_tlepThad = "/home/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_tlepThad_noCKMmix_keepPolInfo_{}ecm365.pkl".format(BSM_mod)
+path_thadTlep = "/home/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_thadTlep_noCKMmix_keepPolInfo_{}ecm365.pkl".format(BSM_mod)
+path_thadThad = "/home/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_thadThad_noCKMmix_keepPolInfo_{}ecm365.pkl".format(BSM_mod)
 
 df_lephad = pd.read_pickle(path_tlepThad)
 df_hadlep = pd.read_pickle(path_thadTlep)
 df_hadhad = pd.read_pickle(path_thadThad)
-
 
 jet_algo = "ee_genkt04" #inclusive anti k_t jet algo with R=0.4
 
@@ -36,60 +39,46 @@ jet_algo = "ee_genkt04" #inclusive anti k_t jet algo with R=0.4
 #Projected amount of tT events at FCC-ee, amount of produced MC events and branching ratios for each decay channel
 ###
 
-N_exp = 2*10**6
-N_SL = events(df_lephad,1)+events(df_hadlep,1)
-N_AH = events(df_hadhad,0)
-BR_SL = 0.438
-BR_AH = 0.457
-R_SL = N_exp*BR_SL/N_SL*60 #scale by 60 because only 1/60 (100k <> 6 million) of all created MC was taken (for testing purposes)
-R_AH = N_exp*BR_AH/N_AH*60
+N_exp_lephad = N_expect["wzp6_ee_SM_tt_tlepThad_noCKMmix_keepPolInfo_{}ecm365".format(BSM_mod)]
+N_exp_hadlep = N_expect["wzp6_ee_SM_tt_thadTlep_noCKMmix_keepPolInfo_{}ecm365".format(BSM_mod)]
+N_exp_hadhad = N_expect["wzp6_ee_SM_tt_thadThad_noCKMmix_keepPolInfo_{}ecm365".format(BSM_mod)]
+
+
+N_lephad = events(df_lephad,1)
+N_hadlep = events(df_hadlep,1)
+N_hadhad = events(df_hadhad,0)
+
+R_lephad = N_exp_lephad/N_lephad
+R_hadlep = N_exp_hadlep/N_hadlep
+R_hadhad = N_exp_hadhad/N_hadhad
 
 
 ###
 #Apply cut flow
 ###
 
-df_lephad,table_lephad = cut_flow(df_lephad,jet_algo,"semileptonic")
-df_hadlep,table_hadlep = cut_flow(df_hadlep,jet_algo,"semileptonic")
-df_hadhad,table_hadhad = cut_flow(df_hadhad,jet_algo,"allhadronic")
+df_lephad,table_lephad = cut_flow(df_lephad,jet_algo,"semileptonic",R_lephad) #leptons originate from a W+ -> lepton_charge=1.0
+df_hadlep,table_hadlep = cut_flow(df_hadlep,jet_algo,"semileptonic",R_hadlep)
+df_hadhad,table_hadhad = cut_flow(df_hadhad,jet_algo,"allhadronic",R_hadhad) #lepton_charge irrelevant for allhadronic sample
 
 cut_names = ["cut2","cut3","cut4","cut5"]
-table_semileptonic,table_allhadronic = signal_eff_pur(cut_names,table_lephad,table_hadlep,table_hadhad,jet_algo,R_SL,R_AH)
+table_semileptonic,table_allhadronic = signal_eff_pur(cut_names,table_lephad,table_hadlep,table_hadhad,jet_algo)
 
 #load xcosTheta values for leptons for semileptonic (=SL) and allhadronic (AH) ntuples 
 x_lplus_lephad,x_lminus_lephad,Theta_lplus_lephad,Theta_lminus_lephad = lxcosTheta(df_lephad)
 x_lplus_hadlep,x_lminus_hadlep,Theta_lplus_hadlep,Theta_lminus_hadlep = lxcosTheta(df_hadlep)
 x_lplus_hadhad,x_lminus_hadhad,Theta_lplus_hadhad,Theta_lminus_hadhad = lxcosTheta(df_hadhad)
 
-#save arrays
-path = Path('/home/skeilbach/FCCee_topEWK/arrays/')
-path.mkdir(parents=True, exist_ok=True)
-
-np.save(path/"x_lplus_lephad",x_lplus_lephad)
-np.save(path/"x_lplushadlep",x_lplus_hadlep)
-np.save(path/"x_lplus_hadhad",x_lplus_hadhad)
-np.save(path/"Theta_lplus_lephad",Theta_lplus_lephad)
-np.save(path/"Theta_lplushadlep",Theta_lplus_hadlep)
-np.save(path/"Theta_lplus_hadhad",Theta_lplus_hadhad)
-
-np.save(path/"x_lminus_lephad",x_lminus_lephad)
-np.save(path/"x_lminushadlep",x_lminus_hadlep)
-np.save(path/"x_lminus_hadhad",x_lminus_hadhad)
-np.save(path/"Theta_lminus_lephad",Theta_lminus_lephad)
-np.save(path/"Theta_lminushadlep",Theta_lminus_hadlep)
-np.save(path/"Theta_lminus_hadhad",Theta_lminus_hadhad)
-
 
 ###
 #Rescale SL and AH histograms to match statistics we would expect for the projected 10⁶ top events at FCC-ee
 ###
 
-#for positively charged leptons and genLeptons (plus scale by 60 because original ntuples contain 6 million samples whereas only 100k are used for testing purposes -> factor 60)
-x_lplus_SL = np.concatenate((x_lplus_lephad,x_lplus_hadlep))
-Theta_lplus_SL = np.concatenate((Theta_lplus_lephad,Theta_lplus_hadlep))
-lplus_hist_SL, lplus_xedges, lplus_yedges = np.histogram2d(x_lplus_SL,np.cos(Theta_lplus_SL), bins=(25,25))
-lplus_hist_AH,_,_ = np.histogram2d(x_lplus_hadhad,np.cos(Theta_lplus_hadhad), bins=(lplus_xedges,lplus_yedges))
-lplus_hist = R_SL*lplus_hist_SL +R_AH* lplus_hist_AH
+#for positively charged leptons and genLeptons 
+lplus_hist_lephad, lplus_xedges, lplus_yedges = np.histogram2d(x_lplus_lephad,np.cos(Theta_lplus_lephad),weights=np.full_like(x_lplus_lephad, R_lephad), bins=(25,25))
+lplus_hist_hadlep,_,_ = np.histogram2d(x_lplus_hadlep,np.cos(Theta_lplus_hadlep),weights=np.full_like(x_lplus_hadlep, R_hadlep), bins=(lplus_xedges,lplus_yedges))
+lplus_hist_hadhad,_,_ = np.histogram2d(x_lplus_hadhad,np.cos(Theta_lplus_hadhad),weights=np.full_like(x_lplus_hadhad, R_hadhad), bins=(lplus_xedges,lplus_yedges))
+lplus_hist = lplus_hist_lephad+lplus_hist_lephad+lplus_hist_hadhad
 
 '''
 Lplus_hist_lephad, Lplus_xedges, Lplus_yedges = np.histogram2d(x_Lplus_lephad,np.cos(Theta_Lplus_lephad), bins=(25,25))
@@ -101,12 +90,29 @@ np.save(path/"Lplus_xedges",Lplus_xedges)
 np.save(path/"Lplus_yedges",Lplus_yedges)
 '''
 
-#for negatively charged leptons and genLepton
-x_lminus_SL = np.concatenate((x_lminus_lephad,x_lminus_hadlep))
-Theta_lminus_SL = np.concatenate((Theta_lminus_lephad,Theta_lminus_hadlep))
-lminus_hist_SL, lminus_xedges, lminus_yedges = np.histogram2d(x_lminus_SL,np.cos(Theta_lminus_SL), bins=(25,25))
-lminus_hist_AH,_,_ = np.histogram2d(x_lminus_hadhad,np.cos(Theta_lminus_hadhad), bins=(lminus_xedges,lminus_yedges))
-lminus_hist = R_SL*lminus_hist_SL +R_AH* lminus_hist_AH
+#for negatively charged leptons and genLeptons 
+lminus_hist_lephad, lminus_xedges, lminus_yedges = np.histogram2d(x_lminus_lephad,np.cos(Theta_lminus_lephad),weights=np.full_like(x_lminus_lephad, R_lephad), bins=(25,25))
+lminus_hist_hadlep,_,_ = np.histogram2d(x_lminus_hadlep,np.cos(Theta_lminus_hadlep),weights=np.full_like(x_lminus_hadlep, R_hadlep), bins=(lminus_xedges,lminus_yedges))
+lminus_hist_hadhad,_,_ = np.histogram2d(x_lminus_hadhad,np.cos(Theta_lminus_hadhad),weights=np.full_like(x_lminus_hadhad, R_hadhad), bins=(lminus_xedges,lminus_yedges))
+lminus_hist = lminus_hist_lephad+lminus_hist_lephad+lminus_hist_hadhad
+
+#save arrays
+path = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_{}'.format(BSM_mod[:-1]))
+path.mkdir(parents=True, exist_ok=True)
+
+with open(path/'table_semileptonic.pkl', 'wb') as f:
+    pickle.dump(table_semileptonic, f)
+with open(path/'table_allhadronic.pkl', 'wb') as f:
+    pickle.dump(table_allhadroic, f)
+
+np.save(path/"lminus_hist_lephad",lminus_hist_lephad)
+np.save(path/"lminus_hist_hadlep",lminus_hist_hadlep)
+np.save(path/"lminus_hist_hadhad",lminus_hist_hadhad)
+
+np.save(path/"lplus_hist_lephad",lplus_hist_lephad)
+np.save(path/"lplus_hist_hadlep",lplus_hist_hadlep)
+np.save(path/"lplus_hist_hadhad",lplus_hist_hadhad)
+
 
 ###
 #Plotting the genLepton and lepton distributions side by side
@@ -156,7 +162,7 @@ ax2.set_zlabel("frequency")
 ax2.view_init(25,-35)
 plt.suptitle(r"$(x,\mathrm{cos}(\Theta))$ for positive reconstructed leptons l and genLeptons L")
 '''
-plt.savefig("/home/skeilbach/FCCee_topEWK/figures/FCCee_xcosTheta_plus.png",dpi=300)
+plt.savefig("/home/skeilbach/FCCee_topEWK/figures/FCCee_xcosTheta_lplus_SM_{}.png".format(BSM_mod),dpi=300)
 plt.close()
 
 #plot x and cosTheta projection for SL and AH for l⁻={e⁻,mu⁻}
@@ -190,12 +196,13 @@ plt.xlabel(r"$\cos\theta$")
 plt.ylabel(r"Number of events")
 plt.legend()
 plt.title(r"Angular distribution for $l\in\{e^-,\mu^-\}$ after cuts")
-plt.savefig("/home/skeilbach/FCCee_topEWK/figures/FCCee_Theta_lminus.png",dpi=300)
+plt.savefig("/home/skeilbach/FCCee_topEWK/figures/FCCee_Theta_lminus_SM_{}.png".format(BSM_mod),dpi=300)
 
 ###
 #Chi square fit
 ###
 
+'''
 #load histogrammed data from MC run with SM couplings
 d_i = lminus_hist
 
@@ -234,6 +241,6 @@ ax.set_ylabel(r"$\Delta \chi^2$")
 plt.title(r"$\delta$={:.4f}$\pm${:.4f}".format(k_min,k_std))
 plt.savefig("/home/skeilbach/FCCee_topEWK/figures/Delta_chi2.png",dpi=300)
 plt.close()
-
+'''
 
 
