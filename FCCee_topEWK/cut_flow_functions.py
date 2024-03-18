@@ -11,8 +11,12 @@ from itertools import compress
 ###
 
 def compress_col(df_col,mask):
-    return [list(compress(df_col[i], mask[i])) for i in range(len(df_col))]
-
+    tmp = []
+    for i,index in enumerate(df_col.index):
+        tmp.append(list(compress(df_col[index], mask[i])))
+    return tmp
+'''
+Do not dabble with jet energies for now as kt_exactly6 jet algo is now being used where rejecting jets would hamper with later cut criteria, e.g. inverse W mass from two hadronic jet
 #jet energy cut: throw away jets with E<10 GeV, i.e. do not consider them as jets
 def cut0(input_df,jet_algo):
     print("---Applying cut0 (jet energy cut): throw away jets with E_jet < 10GeV---")
@@ -35,6 +39,7 @@ def cut0(input_df,jet_algo):
     df["n_jets_{}".format(jet_algo)] = df["cut0"].apply(lambda row: sum(row))
     print("---cut0 applied!---")
     return df    
+'''
 
 #isolation/leading cut: Require lepton candidate to be isolated with dR>0.4 to all jets or leading particle if within a jet with E_l/E_jet > 0.5
 def phi(px,py):
@@ -91,37 +96,38 @@ def pseudorap(Theta):
         tmp.append(hlp)
     return tmp
 
-def leading_lep(lepton_energy,jet_energy,dr_bool,E_lepjet):
+def leading_lep(lepton_energy,jet_energy,dr_bool,ratio_lepjet):
     tmp = []
     lepjet = list(compress(jet_energy,dr_bool)) #all jets which overlap with a semileptonic candidate
     if len(lepjet)==1:
-        return ((lepton_energy/lepjet[0])>E_lepjet)
-    else:
+        return ((lepton_energy/lepjet[0])>ratio_lepjet)
+    elif len(lepjet)>1:
         for i in range(len(lepjet)):
-            tmp.append((lepton_energy/lepjet[i])>E_lepjet)
+            tmp.append((lepton_energy/lepjet[i])>ratio_lepjet)
         return all(tmp) #only return true (i.e. the lepton is the leading particle inside a jet) if the lepton is leading in all jets with whom it overlaps
+    else:
+        return True
 
-def dR(phi_lepton,phi_jets,rap_lepton,rap_jets,jet_energy,lepton_energy,E_lepjet):
+def dR(phi_lepton,phi_jets,rap_lepton,rap_jets,jet_energy,lepton_energy,ratio_lepjet):
     tmp = []
-    if len(phi_lepton!=0):
+    if len(phi_lepton)!=0:
         for j in range(len(phi_lepton)):
             dr_bool = []
             for k in range(len(phi_jets)):
                 dr = np.sqrt((phi_lepton[j]-phi_jets[k])**2+(rap_lepton[j]-rap_jets[k])**2)
                 dr_bool.append(dr<0.4)
-            if sum(dr_bool)!=0:
-                tmp.append(False|leading_lep(lepton_energy[j],jet_energy,dr_bool,E_lepjet))
-            else:
-                tmp.append(True) #if dr_bool contains only False,i.e. len(jet_energy[dr_bool])=0, then we directly know that the lepton is isolated from all jets with dR>0.4
+            tmp.append(False|leading_lep(lepton_energy[j],jet_energy,dr_bool,ratio_lepjet))            
     else:
-        tmp.append(True)
+        tmp.append(False) #for empty entries [] automatically return False
     return tmp
 
 
 
-def df_filter(input_df,mask,lepton_name):
+def df_filter(input_df,mask,lepton_name,cut_name):
     df = input_df.copy()
-    lepton_px, lepton_py, lepton_pz, lepton_phi, lepton_eta, lepton_theta, lepton_energy,lepton_charge = df["{}_px".format(lepton_name)], df["{}_py".format(lepton_name)], df["{}_pz".format(lepton_name)], df["{}_phi".format(lepton_name)],df["{}_eta".format(lepton_name)],df["{}_theta".format(lepton_name)], df["{}_energy".format(lepton_name)],df["{}_charge".format(lepton_name)]
+    lepton_px, lepton_py, lepton_pz, lepton_phi, lepton_eta, lepton_theta, lepton_energy,lepton_charge,lepton_d0,lepton_d0signif = df["{}_px".format(lepton_name)], df["{}_py".format(lepton_name)], df["{}_pz".format(lepton_name)], df["{}_phi".format(lepton_name)],df["{}_eta".format(lepton_name)],df["{}_theta".format(lepton_name)], df["{}_energy".format(lepton_name)],df["{}_charge".format(lepton_name)],df["{}_d0".format(lepton_name)],df["{}_d0signif".format(lepton_name)]
+    #save mask to df as column
+    df["{}_{}".format(cut_name,lepton_name)] = pd.Series(data=mask,index=df.index)
     df["{}_energy".format(lepton_name)] = pd.Series(data=compress_col(lepton_energy,mask),index=df.index)
     df["{}_px".format(lepton_name)] = pd.Series(data=compress_col(lepton_px,mask),index=df.index)
     df["{}_py".format(lepton_name)] = pd.Series(data=compress_col(lepton_py,mask),index=df.index)
@@ -130,7 +136,9 @@ def df_filter(input_df,mask,lepton_name):
     df["{}_eta".format(lepton_name)] = pd.Series(data=compress_col(lepton_eta,mask),index=df.index)
     df["{}_theta".format(lepton_name)] = pd.Series(data=compress_col(lepton_theta,mask),index=df.index)
     df["{}_charge".format(lepton_name)] = pd.Series(data=compress_col(lepton_charge,mask),index=df.index)
-    df["n_{}".format(lepton_name)] = df["cut1_{}".format(lepton_name)].apply(lambda row: sum(row))
+    df["{}_d0".format(lepton_name)] = pd.Series(data=compress_col(lepton_d0,mask),index=df.index)
+    df["{}_d0signif".format(lepton_name)] = pd.Series(data=compress_col(lepton_d0signif,mask),index=df.index)
+    df["n_{}s".format(lepton_name)] = df["{}_{}".format(cut_name,lepton_name)].apply(lambda row: sum(row))
     return df
 
 def cut1(input_df,jet_algo):
@@ -146,18 +154,9 @@ def cut1(input_df,jet_algo):
     for i,index in enumerate(df.index):
         mask_muon.append(dR(phi_muon[index],phi_jet[index],rap_muon[index],rap_jet[index],jet_energy[index],muon_energy[index],0.5))
         mask_electron.append(dR(phi_electron[index],phi_jet[index],rap_electron[index],rap_jet[index],jet_energy[index],electron_energy[index],0.5))
-    #save masks to df as cut1 columns
-    df["cut1_muon"] = pd.Series(data=mask_muon,index=df.index)
-    df["cut1_electron"] = pd.Series(data=mask_electron,index=df.index)
-    #modify masks to revert the prior "error" where empty rows ([]) where marked with True. This error was done to preserve the overall structure of the df
-    electron_index,muon_index = df[df["n_electrons"]==0].index.tolist(),df[df["n_muons"]==0].index.tolist()
-    for index in electron_index:
-        df.at[index,"cut1_electron"] = [False]
-    for index in muon_index:
-        df.at[index,"cut1_muon"] = [False] 
     #apply mask_electron/muon to df to throw away all leptons that do not fulfill the isolation/leading criteria prior to the cut-flow
-    df = df_filter(df,mask_electron,"electron")
-    df = df_filter(df,mask_muon,"muon")
+    df = df_filter(df,mask_electron,"electron","cut1")
+    df = df_filter(df,mask_muon,"muon","cut1")
     print("---cut1 applied!---")
     return df
 
@@ -172,6 +171,8 @@ def cut2(input_df):
     print("---cut2 applied!---")
     return df
 
+'''
+#dismiss n_jet cut as used jet algo uses exclusive 6 jet reco
 #cut3: require >n_jets jets per event
 def cut3(input_df,n_jets,jet_algo):
     print("---Applying cut3: Require n_jets>{} jets per event---".format(n_jets))
@@ -181,7 +182,6 @@ def cut3(input_df,n_jets,jet_algo):
     print("---cut3 applied!---")
     return df
 
-'''
 #dismiss n_btag cut for now as no b reco algo is implemented yet
 #cut: n_btag b-tagged jets per event
 def btag(row):
@@ -204,14 +204,18 @@ def cut2(input_df,n_btag,jet_algo):
     print("---cut2 applied!---")
     return df
 '''
+#cut3: ME cut (to filter out "fake" lepton events where a pi0 contained in a jet may deposit most of its energy in the ECAL faking the signature of a lepton - however without the necessary MET that is associated with the semileptonic decay of the W boson into a lepton and a neutrino)
+def cut3(input_df,ME_cut):
+    print("---Applying cut3: ME > {} GeV---".format(ME_cut))
+    df = input_df.copy()
+    df["cut3"] = df["Emiss_energy"] > ME_cut
+    df = df[df["cut3"]]
+    print("---cut3 applied!---")
+    return df
+
 
 #cut4: upper and lower momentum cut for leptons
 #define cut4 for cut optimisation procedure to get best estimates for upper and lower momentum cut on highest energy lepton
-def max_arr(arr):
-    if len(arr)==0:
-         return 0
-    else:
-        return ak.max(arr)
 
 def calc_p(px,py,pz):
     index = px.index
@@ -219,66 +223,53 @@ def calc_p(px,py,pz):
     p = np.sqrt(px**2+py**2+pz**2)
     return pd.Series(data=p.to_list(),index=index)  
 
-def cut4_opt(input_df,cut_l,comparison):
+def cut4(input_df,p_cut,comparison):
     df = input_df.copy()
     electron_px,electron_py,electron_pz = df["electron_px"],df["electron_py"],df["electron_pz"]
     muon_px,muon_py,muon_pz = df["muon_px"],df["muon_py"],df["muon_pz"]
     df["p_muon"] = calc_p(muon_px,muon_py,muon_pz)
     df["p_electron"] = calc_p(electron_px,electron_py,electron_pz)
+    p_leptons = df["p_muon"]+df["p_electron"]
+    df["p_HE"] = p_leptons.apply(lambda row: ak.max(row)) #highest energy (HE) lepton per event
     if comparison == ">":
-        print("---Applying cut4: lower cut on highest energy lepton with p > {} GeV---".format(cut_l))
-        df["cut4_muon"] = df["p_muon"].apply(lambda row: max_arr(row)>cut_l)
-        df["cut4_electron"] = df["p_electron"].apply(lambda row: max_arr(row)>cut_l)
+        print("---Applying cut4: lower cut on highest energy lepton with p > {} GeV---".format(p_cut))
+        df["cut4_{}".format(comparison)] = df["p_HE"].apply(lambda p: p > p_cut)
     elif comparison == "<":
-        print("---Applying cut4: upper cut on highest energy lepton with p < {} GeV---".format(cut_l))
-        df["cut4_muon"] = df["p_muon"].apply(lambda row: max_arr(row) < cut_l)
-        df["cut4_electron"] = df["p_electron"].apply(lambda row: max_arr(row) < cut_l)
+        print("---Applying cut4: upper cut on highest energy lepton with p < {} GeV---".format(p_cut))
+        df["cut4_{}".format(comparison)] = df["p_HE"].apply(lambda p: p < p_cut)
     else:
         raise ValueError("Invalid comparison operator")
-    df["cut4"] = df["cut4_muon"] | df["cut4_electron"]
-    print("---cut4 applied!---")
+    df = df[df["cut4_{}".format(comparison)]]
+    print("---cut4_{} applied!---".format(comparison))
     return df
 
-def cut4(input_df,lower_lim,upper_lim):
-    df = input_df.copy()
-    print("---Applying cut4: {} < p_leading < {} ---".format(lower_lim,upper_lim))
-    electron_px,electron_py,electron_pz = df["electron_px"],df["electron_py"],df["electron_pz"]
-    muon_px,muon_py,muon_pz = df["muon_px"],df["muon_py"],df["muon_pz"]
-    df["p_muon"] = calc_p(muon_px,muon_py,muon_pz)
-    df["p_electron"] = calc_p(electron_px,electron_py,electron_pz)
-    df["cut4_electron"] = (df["p_electron"].apply(lambda row: max_arr(row)>lower_lim)) & df["p_electron"].apply(lambda row: max_arr(row)<upper_lim)
-    df["cut4_muon"] = (df["p_muon"].apply(lambda row: max_arr(row)>lower_lim)) & df["p_muon"].apply(lambda row: max_arr(row)<upper_lim)
-    df["cut4"] = df["cut4_electron"] | df["cut4_muon"]
-    df = df[df["cut4"]]
-    print("---cut4 applied!---")
-    return df
+#cut5: require semileptonic candidate to have impact parameter d_0 < 0.1mm (+and d0signif = d_0/sqrt(d_0variance) < 50) while having E_l > 20 GeV
 
-#cut5: ME cut (to filter out "fake" lepton events where a pi0 contained in a jet may deposit most of its energy in the ECAL faking the signature of a lepton - however without the necessary MET that is associated with the semileptonic decay of the W boson into a lepton and a neutrino)
-def cut5(input_df):
-    print("---Applying cut5: ME > 40 GeV---")
+def PV_check(row_d0,row_d0signif,row_energy,d0,d0signif,p_lim):
+    tmp = []
+    if len(row_d0)!=0:
+        for i,val in enumerate(row_d0):
+            tmp.append((val<d0)&(row_d0signif[i]<d0signif)&(row_energy[i]>p_lim))
+    else:
+        tmp.append(False)
+    return tmp
+
+def cut5(input_df,d0,d0signif,p_lim):
+    print("---Applying cut5: Require lepton candidate to have d0 < {} and d0_signif < {} plus possess p > {} GeV---".format(d0,d0signif,p_lim))
+    mask_electron,mask_muon = [],[]
     df = input_df.copy()
-    df["cut5"] = df["Emiss_energy"] > 40
+    electron_d0,electron_d0signif,electron_energy = df["electron_d0"],df["electron_d0signif"],df["electron_energy"]
+    muon_d0,muon_d0signif,muon_energy = df["muon_d0"],df["muon_d0signif"],df["muon_energy"]
+    for i,index in enumerate(df.index):
+        mask_electron.append(PV_check(electron_d0[index],electron_d0signif[index],electron_energy[index],d0,d0signif,p_lim))
+        mask_muon.append(PV_check(muon_d0[index],muon_d0signif[index],muon_energy[index],d0,d0signif,p_lim))
+    #apply filters to electrons and muons respectively
+    df = df_filter(df,mask_electron,"electron","cut5")
+    df = df_filter(df,mask_muon,"muon","cut5")
+    df["cut5"] = df["cut5_electron"].apply(lambda row: any(row)) | df["cut5_electron"].apply(lambda row: any(row))
     df = df[df["cut5"]]
     print("---cut5 applied!---")
     return df
-
-#cut7: inverse W mass cut: Compare chi2 values for all semileptonic candidates in each event
-def BW_resonance(E,a,E_0):
-    return a/(a**2/4+(E-E_0)**2)
-
-def mass_W(E_l,E_nu,px_l,py_l,pz_l,px_nu,py_nu,pz_nu):
-    tmp = []
-    for i in range(len(E_l)):
-        tmp.append(2*(E_l[i]*E_nu+px_l[i]*px_nu+py_l[i]*py_nu+pz_l[i]*pz_nu))
-    return tmp
-        
-def m_W_lep(input_df):
-    df = input_df.copy()
-    df["m_W_electron"] = df[["Emiss","Emiss_px","Emiss_py","Emiss_pz","electron_energy","electron_px","electron_py","electron_pz"]].apply(lambda row: mass_W(row["electron_energy"],row["Emiss"],row["electron_px"],row["electron_py"],row["electron_pz"],row["Emiss_py"],row["Emiss_py"],row["Emiss_pz"]),axis=1)
-    df["m_W_muon"] = df[["Emiss","Emiss_px","Emiss_py","Emiss_pz","muon_energy","muon_px","muon_py","muon_pz"]].apply(lambda row: mass_W(row["muon_energy"],row["Emiss"],row["muon_px"],row["muon_py"],row["muon_pz"],row["Emiss_py"],row["Emiss_py"],row["Emiss_pz"]),axis=1)
-    m_W_electron = np.array(ak.flatten(df["m_W_electron"]))
-    m_W_muon = np.array(ak.flatten(df["m_W_muon"]))
-    return m_W_electron + m_W_muon
 
 ###
 #Calculate efficiency and purity of cut-flow
@@ -309,12 +300,15 @@ def events_bruteforce(df,n_Wleptons):
 
 
 def events(df,n_Wleptons):
-    Electron_Wplus = df["genElectron_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
-    Muon_Wplus = df["genMuon_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
-    Electron_Wminus = df["genElectron_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
-    Muon_Wminus = df["genMuon_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
-    Leptons_W = Electron_Wplus + Muon_Wplus + Electron_Wminus + Muon_Wminus
-    return sum(Leptons_W == n_Wleptons )
+    if df.empty:
+        return 0
+    else:
+        Electron_Wplus = df["genElectron_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
+        Muon_Wplus = df["genMuon_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
+        Electron_Wminus = df["genElectron_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
+        Muon_Wminus = df["genMuon_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
+        Leptons_W = Electron_Wplus + Muon_Wplus + Electron_Wminus + Muon_Wminus
+        return sum(Leptons_W == n_Wleptons )
 
 
 #define signal significance and signal purity (both semileptonic top decays as well as allhadronic ones are considered "signal" -> distinguish eff and pur for semileptonic and hadronic events in the cut-flow tho!)
@@ -334,7 +328,7 @@ def signal_eff_pur(cut_names,n_lephad,n_hadlep,n_hadhad,jet_algo):
     k = k_SL + k_AH
     for i,cut_name in enumerate(cut_names):
         dic_SL, dic_AH = {}, {}
-        dic_SL["tT semileptonic"],dic_AH["tT all-hadronic"] = cut_name, cut_name
+        dic_SL["tT semileptonic"],dic_AH["tT full hadronic"] = cut_name, cut_name
         dic_SL[r"$\epsilon$ [%]"], dic_AH[r"$\epsilon$ [%]"] = np.round((k_SL[i]/n_tot_SL)*100,5),np.round((k_AH[i]/n_tot_AH)*100,5)
         dic_SL[r"$\sigma_{\epsilon}$ [%]"],dic_AH[r"$\sigma_{\epsilon}$ [%]"] = np.round(eff_std(k_SL[i],n_tot_SL)*100,5),np.round(eff_std(k_AH[i],n_tot_AH)*100,5)
         dic_SL[r"$\pi$ [%]"], dic_AH[r"$\pi$ [%]"] = np.round((k_SL[i]/k[i])*100,5),np.round((k_AH[i]/k[i])*100,5)
@@ -344,28 +338,36 @@ def signal_eff_pur(cut_names,n_lephad,n_hadlep,n_hadhad,jet_algo):
     print("---Using jet_{} as jet_algo---".format(jet_algo))
     print("semileptonic efficiency and purity:")
     print(tabulate(table_SL,headers="keys",tablefmt="grid"))
-    print("allhdronic efficiency and purity:")
+    print("full hadronic efficiency and purity:")
     print(tabulate(table_AH,headers="keys",tablefmt="grid"))
     return table_SL,table_AH
 
 #Define cut-flow -> specify decay channel (because cut flow is applied to tlepThad,thadTlep and thadThad respectively)  -> apply cut flow to df iteratively and calculate number of allhadronic/semileptonic events that remain after each cut to later calculate eff and pur with these numbers
-def cut_flow(df,jet_algo,decay_channel,R):
+def cut_flow(df,jet_algo,decay_channel,R,cut3_lim,cut4_lim,cut5_lim=None):
     table_s = []
     if (decay_channel=="semileptonic"):
         n_Wleptons = 1
     elif (decay_channel=="allhadronic"):
         n_Wleptons = 0
     table_s.append(events(df,n_Wleptons))
-    df = cut0(df,jet_algo) #only filters out jets with E<10 GeV so doesnt influence number of lephad and hadhad events
-    df = cut1(df,jet_algo) #rejects non leading/isolated leptons 
-    df = cut2(df)
-    table_s.append(events(df,n_Wleptons))
-    df = cut3(df,3,jet_algo)
-    table_s.append(events(df,n_Wleptons))
-    df = cut4(df,10,120)
-    table_s.append(events(df,n_Wleptons))
-    df = cut5(df)
-    table_s.append(events(df,n_Wleptons))
+    if cut5_lim==None:
+        df = cut1(df,jet_algo) #rejects non leading/isolated leptons 
+        df = cut2(df)
+        table_s.append(events(df,n_Wleptons))
+        df = cut3(df,cut3_lim)
+        table_s.append(events(df,n_Wleptons))
+        df = cut4(df,cut4_lim,">")
+        table_s.append(events(df,n_Wleptons))
+    else:
+        df = cut1(df,jet_algo) #rejects non leading/isolated leptons 
+        df = cut2(df)
+        table_s.append(events(df,n_Wleptons))
+        df = cut3(df,cut3_lim)
+        table_s.append(events(df,n_Wleptons))
+        df = cut4(df,cut4_lim,">")
+        table_s.append(events(df,n_Wleptons))
+        df = cut5(df,cut5_lim[0],cut5_lim[1],cut5_lim[2])
+        table_s.append(events(df,n_Wleptons))
     return df,R*np.array(table_s)
 
 ###
