@@ -5,6 +5,7 @@ import awkward as ak
 from tabulate import tabulate
 from scipy import constants
 from itertools import compress
+from sample_norms import N_expect
 
 ###
 #Define cuts for cut-flow
@@ -15,6 +16,19 @@ def compress_col(df_col,mask):
     for i,index in enumerate(df_col.index):
         tmp.append(list(compress(df_col[index], mask[i])))
     return tmp
+
+#Define df loader and Rescaling factor function
+def df_load(channel,BSM_mod):
+    filepath = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_{}_noCKMmix_keepPolInfo_{}ecm365.pkl".format(channel,BSM_mod)
+    df = pd.read_pickle(filepath)
+    N_exp = N_expect["wzp6_ee_SM_tt_{}_noCKMmix_keepPolInfo_{}ecm365".format(channel,BSM_mod)]
+    if (channel=="tlepThad")|(channel=="thadTlep"):
+        N_df = events(df,1)
+    else:
+        N_df = events(df,0)
+    R_df = N_exp/N_df
+    return df,R_df
+
 '''
 Do not dabble with jet energies for now as kt_exactly6 jet algo is now being used where rejecting jets would hamper with later cut criteria, e.g. inverse W mass from two hadronic jet
 #jet energy cut: throw away jets with E<10 GeV, i.e. do not consider them as jets
@@ -141,7 +155,8 @@ def df_filter(input_df,mask,lepton_name,cut_name):
     df["n_{}s".format(lepton_name)] = df["{}_{}".format(cut_name,lepton_name)].apply(lambda row: sum(row))
     return df
 
-def cut1(input_df,jet_algo):
+def cut1(input_df,**kwargs):
+    jet_algo = kwargs["jet_algo"]
     print("---Applying cut1: Require lepton candidate to be isolated from all jets with dR > 0.4 or being the leading particle within the jet---")
     mask_electron,mask_muon = [],[]
     df = input_df.copy()
@@ -161,7 +176,7 @@ def cut1(input_df,jet_algo):
     return df
 
 #cut2: remove all events with 0 leptons
-def cut2(input_df):
+def cut2(input_df,**kwargs):
     print("---Applying cut2: Require n_muons(n_electrons) > 0---")
     df = input_df.copy()
     df["cut2_muon"] = df["n_muons"]!=0
@@ -205,7 +220,8 @@ def cut2(input_df,n_btag,jet_algo):
     return df
 '''
 #cut3: ME cut (to filter out "fake" lepton events where a pi0 contained in a jet may deposit most of its energy in the ECAL faking the signature of a lepton - however without the necessary MET that is associated with the semileptonic decay of the W boson into a lepton and a neutrino)
-def cut3(input_df,ME_cut):
+def cut3(input_df,**kwargs):
+    ME_cut = kwargs["ME_cut"]
     print("---Applying cut3: ME > {} GeV---".format(ME_cut))
     df = input_df.copy()
     df["cut3"] = df["Emiss_energy"] > ME_cut
@@ -223,7 +239,9 @@ def calc_p(px,py,pz):
     p = np.sqrt(px**2+py**2+pz**2)
     return pd.Series(data=p.to_list(),index=index)  
 
-def cut4(input_df,p_cut,comparison):
+def cut4(input_df,**kwargs):
+    p_cut = kwargs["p_cut"]
+    comparison = kwargs["comparison"]
     df = input_df.copy()
     electron_px,electron_py,electron_pz = df["electron_px"],df["electron_py"],df["electron_pz"]
     muon_px,muon_py,muon_pz = df["muon_px"],df["muon_py"],df["muon_pz"]
@@ -254,15 +272,18 @@ def PV_check(row_d0,row_d0signif,row_energy,d0,d0signif,p_lim):
         tmp.append(False)
     return tmp
 
-def cut5(input_df,d0,d0signif,p_lim):
-    print("---Applying cut5: Require lepton candidate to have d0 < {} and d0_signif < {} plus possess p > {} GeV---".format(d0,d0signif,p_lim))
+def cut5(input_df,**kwargs):
+    d0 = kwargs["d0"]
+    d0signif = kwargs["d0_signif"]
+    p_cut = kwargs["p_cut"]
+    print("---Applying cut5: Require lepton candidate to have d0 < {} mm and d0_signif < {} plus possess p > {} GeV---".format(d0,d0signif,p_cut))
     mask_electron,mask_muon = [],[]
     df = input_df.copy()
     electron_d0,electron_d0signif,electron_energy = df["electron_d0"],df["electron_d0signif"],df["electron_energy"]
     muon_d0,muon_d0signif,muon_energy = df["muon_d0"],df["muon_d0signif"],df["muon_energy"]
     for i,index in enumerate(df.index):
-        mask_electron.append(PV_check(electron_d0[index],electron_d0signif[index],electron_energy[index],d0,d0signif,p_lim))
-        mask_muon.append(PV_check(muon_d0[index],muon_d0signif[index],muon_energy[index],d0,d0signif,p_lim))
+        mask_electron.append(PV_check(electron_d0[index],electron_d0signif[index],electron_energy[index],d0,d0signif,p_cut))
+        mask_muon.append(PV_check(muon_d0[index],muon_d0signif[index],muon_energy[index],d0,d0signif,p_cut))
     #apply filters to electrons and muons respectively
     df = df_filter(df,mask_electron,"electron","cut5")
     df = df_filter(df,mask_muon,"muon","cut5")
@@ -321,20 +342,23 @@ def eff_std(k_s,n_s):
 def pur_std(k_s,k_b,n_s,n_b):
     return np.sqrt(k_s**3/(k_s+k_b)**6 * (1-k_s/n_s)+k_s**2*k_b/(k_s+k_b)**4 * (1-k_b/n_b))
 
-def signal_eff_pur(cut_names,n_lephad,n_hadlep,n_hadhad,jet_algo):
+def signal_eff_pur(cut_dic,jet_algo,**kwargs):
     table_SL,table_AH = [],[]
-    n_tot_SL,n_tot_AH = n_lephad[0]+n_hadlep[0],n_hadhad[0] #total number of events before all cuts
-    k_SL,k_AH = n_lephad[1:]+n_hadlep[1:],n_hadhad[1:] #number of events after each cut
-    k = k_SL + k_AH
-    for i,cut_name in enumerate(cut_names):
-        dic_SL, dic_AH = {}, {}
-        dic_SL["tT semileptonic"],dic_AH["tT full hadronic"] = cut_name, cut_name
-        dic_SL[r"$\epsilon$ [%]"], dic_AH[r"$\epsilon$ [%]"] = np.round((k_SL[i]/n_tot_SL)*100,5),np.round((k_AH[i]/n_tot_AH)*100,5)
-        dic_SL[r"$\sigma_{\epsilon}$ [%]"],dic_AH[r"$\sigma_{\epsilon}$ [%]"] = np.round(eff_std(k_SL[i],n_tot_SL)*100,5),np.round(eff_std(k_AH[i],n_tot_AH)*100,5)
-        dic_SL[r"$\pi$ [%]"], dic_AH[r"$\pi$ [%]"] = np.round((k_SL[i]/k[i])*100,5),np.round((k_AH[i]/k[i])*100,5)
-        dic_SL[r"$\sigma_{\pi}$ [%]"],dic_AH[r"$\sigma_{\pi}$ [%]"] = np.round(pur_std(k_SL[i],k_AH[i],n_tot_SL,n_tot_AH)*100,5),np.round(pur_std(k_AH[i],k_SL[i],n_tot_AH,n_tot_SL)*100,5)
-        table_SL.append(dic_SL)
-        table_AH.append(dic_AH)
+    n_lephad,n_hadlep,n_hadhad = kwargs["tlepThad"],kwargs["thadTlep"],kwargs["thadThad"]
+    for i,cut_name in enumerate(cut_dic):
+        if i==0:
+            n_tot_SL,n_tot_AH = n_lephad[i]+n_hadlep[i],n_hadhad[i] #total number of events before all cuts
+        else:
+            k_SL,k_AH = n_lephad[i]+n_lephad[i],n_hadhad[i] #number of events after each cut
+            k = k_SL+k_AH
+            dic_SL, dic_AH = {}, {}
+            dic_SL["tT semileptonic"],dic_AH["tT full hadronic"] = cut_name, cut_name
+            dic_SL[r"$\epsilon$ [%]"], dic_AH[r"$\epsilon$ [%]"] = np.round((k_SL/n_tot_SL)*100,5),np.round((k_AH/n_tot_AH)*100,5)
+            dic_SL[r"$\sigma_{\epsilon}$ [%]"],dic_AH[r"$\sigma_{\epsilon}$ [%]"] = np.round(eff_std(k_SL,n_tot_SL)*100,5),np.round(eff_std(k_AH,n_tot_AH)*100,5)
+            dic_SL[r"$\pi$ [%]"], dic_AH[r"$\pi$ [%]"] = np.round((k_SL/k)*100,5),np.round((k_AH/k)*100,5)
+            dic_SL[r"$\sigma_{\pi}$ [%]"],dic_AH[r"$\sigma_{\pi}$ [%]"] = np.round(pur_std(k_SL,k_AH,n_tot_SL,n_tot_AH)*100,5),np.round(pur_std(k_AH,k_SL,n_tot_AH,n_tot_SL)*100,5)
+            table_SL.append(dic_SL)
+            table_AH.append(dic_AH)
     print("---Using jet_{} as jet_algo---".format(jet_algo))
     print("semileptonic efficiency and purity:")
     print(tabulate(table_SL,headers="keys",tablefmt="grid"))
@@ -343,30 +367,14 @@ def signal_eff_pur(cut_names,n_lephad,n_hadlep,n_hadhad,jet_algo):
     return table_SL,table_AH
 
 #Define cut-flow -> specify decay channel (because cut flow is applied to tlepThad,thadTlep and thadThad respectively)  -> apply cut flow to df iteratively and calculate number of allhadronic/semileptonic events that remain after each cut to later calculate eff and pur with these numbers
-def cut_flow(df,jet_algo,decay_channel,R,cut3_lim,cut4_lim,cut5_lim=None):
-    table_s = []
-    if (decay_channel=="semileptonic"):
+def cut_flow(df,cut_dic,cut_limits_dic,decay_channel,R):
+    table_s = [] #store amount of full hadronic/semileptonic signal events after each cut
+    if (decay_channel=="tlepThad")|(decay_channel=="thadTlep"):
         n_Wleptons = 1
-    elif (decay_channel=="allhadronic"):
+    elif (decay_channel=="thadThad"):
         n_Wleptons = 0
-    table_s.append(events(df,n_Wleptons))
-    if cut5_lim==None:
-        df = cut1(df,jet_algo) #rejects non leading/isolated leptons 
-        df = cut2(df)
-        table_s.append(events(df,n_Wleptons))
-        df = cut3(df,cut3_lim)
-        table_s.append(events(df,n_Wleptons))
-        df = cut4(df,cut4_lim,">")
-        table_s.append(events(df,n_Wleptons))
-    else:
-        df = cut1(df,jet_algo) #rejects non leading/isolated leptons 
-        df = cut2(df)
-        table_s.append(events(df,n_Wleptons))
-        df = cut3(df,cut3_lim)
-        table_s.append(events(df,n_Wleptons))
-        df = cut4(df,cut4_lim,">")
-        table_s.append(events(df,n_Wleptons))
-        df = cut5(df,cut5_lim[0],cut5_lim[1],cut5_lim[2])
+    for cut_name in cut_dic:
+        df = cut_dic[cut_name](df,**cut_limits_dic[cut_name])
         table_s.append(events(df,n_Wleptons))
     return df,R*np.array(table_s)
 
@@ -449,3 +457,4 @@ def LxcosTheta(df):
     Theta_genLplus,Theta_genLminus = np.concatenate((Theta_genEplus,Theta_genMuplus)), np.concatenate((Theta_genEminus,Theta_genMuminus))
     return x_genLplus,x_genLminus,Theta_genLplus,Theta_genLminus
 
+ 

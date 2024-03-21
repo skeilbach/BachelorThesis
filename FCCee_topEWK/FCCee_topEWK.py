@@ -12,7 +12,7 @@ from scipy import constants
 from iminuit import Minuit
 from iminuit import minimize
 from matplotlib.patches import Rectangle
-from cut_flow_functions import cut_flow,lxcosTheta,LxcosTheta,signal_eff_pur,events
+from cut_flow_functions import cut_flow,lxcosTheta,signal_eff_pur,events,df_load,cut1,cut2,cut3,cut4,cut5
 from pathlib import Path
 from sample_norms import N_expect
 from argparse import Namespace
@@ -25,97 +25,136 @@ Event selection cuts are applied to the data try to minimise background events e
 ###
 
 #specify BSM modification
-BSM_mod = "vr_ttZup_" # ""for no modification,i.e. SM coupling
+BSM_mod = ["","ta_ttAdown_"] # ""for no modification,i.e. SM coupling
 
-#import ntuples and specify jet algo
-path_tlepThad = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_tlepThad_noCKMmix_keepPolInfo_{}ecm365.pkl".format(BSM_mod)
-path_thadTlep = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_thadTlep_noCKMmix_keepPolInfo_{}ecm365.pkl".format(BSM_mod)
-path_thadThad = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_thadThad_noCKMmix_keepPolInfo_{}ecm365.pkl".format(BSM_mod)
-
-df_lephad = pd.read_pickle(path_tlepThad)[:100000]
-df_hadlep = pd.read_pickle(path_thadTlep)[:100000]
-df_hadhad = pd.read_pickle(path_thadThad)[:100000]
-
-#jet_algo = "ee_genkt04" #inclusive anti k_t jet algo with R=0.4
+#Define jet algo
 jet_algo = "kt_exactly6"
 
-###
-#Projected amount of tT events at FCC-ee, amount of produced MC events and branching ratios for each decay channel
-###
+#Define cuts to be used in cut flow
+cut_dic = {"cut1": cut1,
+	"cut2": cut2,
+	"cut3": cut3,
+	"cut4": cut4,
+	"cut5": cut5
+       }
 
-N_exp_lephad = N_expect["wzp6_ee_SM_tt_tlepThad_noCKMmix_keepPolInfo_{}ecm365".format(BSM_mod)]
-N_exp_hadlep = N_expect["wzp6_ee_SM_tt_thadTlep_noCKMmix_keepPolInfo_{}ecm365".format(BSM_mod)]
-N_exp_hadhad = N_expect["wzp6_ee_SM_tt_thadThad_noCKMmix_keepPolInfo_{}ecm365".format(BSM_mod)]
+#Define cut limits
+cut_limits = {"cut1": {"jet_algo":jet_algo},
+	      "cut2": {"":""}, #cut2 doesnt require any additional cut limits
+              "cut3": {"ME_cut":23},
+              "cut4": {"p_cut":13,"comparison": ">"},
+              "cut5": {"d0":0.1,"d0_signif": 50, "p_cut":13}
+             }
 
+#Define which ntuples are to be included
+ntuples = ["tlepThad","thadTlep","thadThad"]
 
-N_lephad = events(df_lephad,1)
-N_hadlep = events(df_hadlep,1)
-N_hadhad = events(df_hadhad,0)
+def data_loader(ntuples,filepath,projection):
+    tmp = []
+    for channel in ntuples:
+        tmp.append(np.load(filepath/"counts_lminus_{}.npy".format(channel)))
+    if projection=="x": 
+        return tmp[0][:, 0]+tmp[1][:,0],tmp[2][:,0]
+    if projection=="cosTheta":
+        return tmp[0][0,:]+tmp[1][0,:],tmp[2][0,:]
+        
 
-R_lephad = N_exp_lephad/N_lephad
-R_hadlep = N_exp_hadlep/N_hadlep
-R_hadhad = N_exp_hadhad/N_hadhad
+for BSM_coupling in BSM_mod:
+    #Define dictionaries to save results for each coupling, i.e. respective cut-flow eff/pur (in table_dic) and the x,cosTheta results (in results_dic)
+    table_dic = {}
+    results_dic = {}
+    path = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_{}'.format(BSM_coupling))
+    path.mkdir(parents=True, exist_ok=True)
+    for channel in ntuples:
+        df_channel,R_channel = df_load(channel,BSM_coupling)
+        #Apply cuts to the df
+        df_channel,table_df = cut_flow(df_channel,cut_dic,cut_limits,channel,R_channel)
+        #Calculate reduced energy x and polar angle Theta 
+        x_lplus,x_lminus,Theta_lplus,Theta_lminus = lxcosTheta(df_channel)
+        table_dic[channel] = table_df
+        if channel=="tlepThad":
+            counts_lplus,lplus_xedges,lplus_yedges = np.histogram2d(x_lplus,np.cos(Theta_lplus),weights=np.full_like(x_lplus, R_channel), bins=(25,25))
+            counts_lminus,lminus_xedges,lminus_yedges = np.histogram2d(x_lminus,np.cos(Theta_lminus),weights=np.full_like(x_lminus, R_channel), bins=(25,25))
+        else:
+            counts_lplus,_,_ = np.histogram2d(x_lplus,np.cos(Theta_lplus),weights=np.full_like(x_lplus, R_channel), bins=(lplus_xedges,lplus_yedges))
+            counts_lminus,_,_ = np.histogram2d(x_lminus,np.cos(Theta_lminus),weights=np.full_like(x_lminus, R_channel), bins=(lminus_xedges,lminus_yedges))
+        results_dic[channel] = {"counts_lplus": counts_lplus,"counts_lminus":counts_lminus}
+        #save arrays
+        np.save(path/"counts_lplus_{}".format(channel),counts_lplus)
+        np.save(path/"counts_lminus_{}".format(channel),counts_lminus) 
+    table_semileptonic,table_allhadronic = signal_eff_pur(cut_dic,jet_algo,**table_dic)
+    #save these arrays as well
+    with open(path/'table_semileptonic.pkl', 'wb') as f:
+        pickle.dump(table_semileptonic, f)
+    with open(path/'table_allhadronic.pkl', 'wb') as f:
+        pickle.dump(table_allhadronic, f)
+    #plot x and cosTheta projection and (BSM-SM) diff plots for negativ leptons
+    #Define custom colours
+    kit_green100=(0,.59,.51)
+    kit_green15=(.85,.93,.93)
+    #load SM data 
+    path_SM = Path("/home/skeilbach/FCCee_topEWK/arrays/SM_")
+    x_lminus_counts_SL_SM,x_lminus_counts_AH_SM = data_loader(ntuples,path_SM,"x")
+    cosTheta_lminus_counts_SL_SM,cosTheta_lminus_counts_AH_SM = data_loader(ntuples,path_SM,"cosTheta")
+    #x projection + SM-BSM diff plots
+    fig, (ax1,ax2) = plt.subplots(2,1,sharex=True)
+    x_lminus_counts_SL, x_lminus_counts_AH = data_loader(ntuples,path,"x")
+    x_bin_edges = lminus_xedges
+    ax1.stairs(x_lminus_counts_SL,x_bin_edges,hatch="///",color=kit_green100,fill=True,label="semileptonic signal")
+    ax1.stairs(x_lminus_counts_AH,x_bin_edges,hatch="||",color=kit_green15,fill=True,label="full hadronic signal")
+    ax1.set_xticks(np.arange(0,1.1,0.1))
+    ax1.set_yscale("log")
+    ax1.set_yticks([1,10,10**2,10**3,10**4])
+    ax1.set_yticklabels(["1","10",r"$10^2$",r"$10^3$",r"$10^4$"])
+    ax1.set_ylabel(r"Number of events")
+    ax1.legend()
+    if BSM_coupling=="":
+        ax1.set_title(r"Reduced energy for SM coupling")
+    if BSM_coupling!="":
+        ax1.set_title(r"Reduced energy for modified ({}) coupling".format(BSM_coupling[:-1])) 
+    ax2.stairs(x_lminus_counts_SL-x_lminus_counts_SL_SM,x_bin_edges,color="red",label="semileptonic signal")
+    ax2.stairs(x_lminus_counts_AH-x_lminus_counts_AH_SM,x_bin_edges,color="blue",label="full hadronic signal")
+    ax2.set_xticks(np.arange(0,1.1,0.1))
+    ax2.set_xlabel(r"$x$")
+    ax2.set_ylabel(r"Number of events")
+    ax2.legend()
+    if BSM_coupling=="":
+        ax2.set_title(r"$\Delta(\mathrm{{SM-SM}})$")
+    if BSM_coupling!="":
+        ax2.set_title(r"$\Delta(\mathrm{{BSM-SM}})$ for {} modification".format(BSM_coupling[:-1]))
+    plt.suptitle(r"Reduced energy for $l\in\{e^-,\mu^-\}$ after cuts",fontweight='bold')
+    plt.savefig("/home/skeilbach/FCCee_topEWK/figures/ee_tt_SM_{}x_lminus.png".format(BSM_coupling),dpi=300)
+    plt.close()
+    #cosTheta projection
+    fig, (ax1,ax2) = plt.subplots(2,1,sharex=True)
+    cosTheta_lminus_counts_SL, cosTheta_lminus_counts_AH = data_loader(ntuples,path,"cosTheta")
+    cosTheta_bin_edges = lminus_yedges
+    ax1.stairs(cosTheta_lminus_counts_SL,cosTheta_bin_edges,hatch="///",color=kit_green100,fill=True,label="semileptonic signal")
+    ax1.stairs(cosTheta_lminus_counts_AH,cosTheta_bin_edges,hatch="||",color=kit_green15,fill=True,label="full hadronic signal")
+    ax1.set_xticks=(np.arange(-1,1.2,0.2))
+    ax1.set_yscale("log")
+    ax1.set_yticks([1,10,10**2,10**3,10**4])
+    ax1.set_yticklabels(["1","10",r"$10^2$",r"$10^3$",r"$10^4$"])
+    ax1.set_ylabel(r"Number of events")
+    ax1.legend()
+    if BSM_coupling=="":
+        ax1.set_title(r"Angular distribution for SM coupling")
+    if BSM_coupling!="":
+        ax1.set_title(r"Angular distribution for modified ({}) coupling".format(BSM_coupling[:-1]))
+    ax2.stairs(cosTheta_lminus_counts_SL-cosTheta_lminus_counts_SL_SM,cosTheta_bin_edges,color="red",label="semileptonic signal")
+    ax2.stairs(cosTheta_lminus_counts_AH-cosTheta_lminus_counts_AH_SM,cosTheta_bin_edges,color="blue",label="full hadronic signal")
+    ax2.set_xticks(np.arange(-1,1.2,0.2))
+    ax2.set_xlabel(r"$\cos\theta$")
+    ax2.set_ylabel(r"Number of events")
+    ax2.legend()
+    if BSM_coupling=="":
+        ax2.set_title(r"$\Delta(\mathrm{{SM-SM}})$")
+    if BSM_coupling!="":
+        ax2.set_title(r"$\Delta(\mathrm{{BSM-SM}})$ for {} modification".format(BSM_coupling[:-1]))
+    plt.suptitle(r"Angular distribution for $l\in\{e^-,\mu^-\}$ after cuts",fontweight="bold")
+    plt.savefig("/home/skeilbach/FCCee_topEWK/figures/ee_tt_SM_{}cosTheta_lminus.png".format(BSM_coupling),dpi=300)
+    plt.close()
 
-
-###
-#Apply cut flow
-###
-
-df_lephad,table_lephad = cut_flow(df_lephad,jet_algo,"semileptonic",R_lephad,23,13) #leptons originate from a W+ -> lepton_charge=1.0
-df_hadlep,table_hadlep = cut_flow(df_hadlep,jet_algo,"semileptonic",R_hadlep,23,13)
-df_hadhad,table_hadhad = cut_flow(df_hadhad,jet_algo,"allhadronic",R_hadhad,23,13) #lepton_charge irrelevant for allhadronic sample
-
-cut_names = ["cut2","cut3","cut4_>"]
-table_semileptonic,table_allhadronic = signal_eff_pur(cut_names,table_lephad,table_hadlep,table_hadhad,jet_algo)
-
-#load xcosTheta values for leptons for semileptonic (=SL) and allhadronic (AH) ntuples 
-x_lplus_lephad,x_lminus_lephad,Theta_lplus_lephad,Theta_lminus_lephad = lxcosTheta(df_lephad)
-x_lplus_hadlep,x_lminus_hadlep,Theta_lplus_hadlep,Theta_lminus_hadlep = lxcosTheta(df_hadlep)
-x_lplus_hadhad,x_lminus_hadhad,Theta_lplus_hadhad,Theta_lminus_hadhad = lxcosTheta(df_hadhad)
-
-
-###
-#Rescale SL and AH histograms to match statistics we would expect for the projected 10⁶ top events at FCC-ee
-###
-
-#for positively charged leptons and genLeptons 
-lplus_hist_lephad, lplus_xedges, lplus_yedges = np.histogram2d(x_lplus_lephad,np.cos(Theta_lplus_lephad),weights=np.full_like(x_lplus_lephad, R_lephad), bins=(25,25))
-lplus_hist_hadlep,_,_ = np.histogram2d(x_lplus_hadlep,np.cos(Theta_lplus_hadlep),weights=np.full_like(x_lplus_hadlep, R_hadlep), bins=(lplus_xedges,lplus_yedges))
-lplus_hist_hadhad,_,_ = np.histogram2d(x_lplus_hadhad,np.cos(Theta_lplus_hadhad),weights=np.full_like(x_lplus_hadhad, R_hadhad), bins=(lplus_xedges,lplus_yedges))
-lplus_hist = lplus_hist_lephad+lplus_hist_lephad+lplus_hist_hadhad
-
-'''
-Lplus_hist_lephad, Lplus_xedges, Lplus_yedges = np.histogram2d(x_Lplus_lephad,np.cos(Theta_Lplus_lephad), bins=(25,25))
-Lplus_hist_hadlep,_,_ = np.histogram2d(x_Lplus_hadlep,np.cos(Theta_Lplus_hadlep), bins=(25,25))
-Lplus_hist_hadhad,_,_ = np.histogram2d(x_Lplus_hadhad,np.cos(Theta_Lplus_hadhad), bins=(25,25))
-Lplus_hist = R_SL*Lplus_hist_lephad+R_SL*Lplus_hist_hadlep+R_AH* Lplus_hist_hadhad
-np.save(path/"Lplus_hist",Lplus_hist)
-np.save(path/"Lplus_xedges",Lplus_xedges)
-np.save(path/"Lplus_yedges",Lplus_yedges)
-'''
-
-#for negatively charged leptons and genLeptons 
-lminus_hist_lephad, lminus_xedges, lminus_yedges = np.histogram2d(x_lminus_lephad,np.cos(Theta_lminus_lephad),weights=np.full_like(x_lminus_lephad, R_lephad), bins=(25,25))
-lminus_hist_hadlep,_,_ = np.histogram2d(x_lminus_hadlep,np.cos(Theta_lminus_hadlep),weights=np.full_like(x_lminus_hadlep, R_hadlep), bins=(lminus_xedges,lminus_yedges))
-lminus_hist_hadhad,_,_ = np.histogram2d(x_lminus_hadhad,np.cos(Theta_lminus_hadhad),weights=np.full_like(x_lminus_hadhad, R_hadhad), bins=(lminus_xedges,lminus_yedges))
-lminus_hist = lminus_hist_lephad+lminus_hist_lephad+lminus_hist_hadhad
-
-#save arrays
-path = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_{}'.format(BSM_mod))
-path.mkdir(parents=True, exist_ok=True)
-
-with open(path/'table_semileptonic.pkl', 'wb') as f:
-    pickle.dump(table_semileptonic, f)
-with open(path/'table_allhadronic.pkl', 'wb') as f:
-    pickle.dump(table_allhadronic, f)
-
-np.save(path/"lminus_hist_lephad",lminus_hist_lephad)
-np.save(path/"lminus_hist_hadlep",lminus_hist_hadlep)
-np.save(path/"lminus_hist_hadhad",lminus_hist_hadhad)
-
-np.save(path/"lplus_hist_lephad",lplus_hist_lephad)
-np.save(path/"lplus_hist_hadlep",lplus_hist_hadlep)
-np.save(path/"lplus_hist_hadhad",lplus_hist_hadhad)
 
 
 ###
@@ -170,55 +209,18 @@ plt.savefig("/home/skeilbach/FCCee_topEWK/figures/FCCee_xcosTheta_lplus_SM_{}.pn
 plt.close()
 '''
 
-#plot x and cosTheta projection for SL and AH for l⁻={e⁻,mu⁻}
-x_lminus_counts_SL, x_bin_edges = lminus_hist_hadlep[:, 0]+lminus_hist_lephad[:,0],lminus_xedges
-x_lminus_counts_AH = lminus_hist_hadhad[:,0]
-
-cosTheta_lminus_counts_SL, cosTheta_bin_edges = lminus_hist_hadlep[0,:]+lminus_hist_lephad[0,:],lminus_yedges
-cosTheta_lminus_counts_AH = lminus_hist_hadhad[0,:]
-
-kit_green100=(0,.59,.51)
-kit_green15 =(.85,.93,.93)
-
-plt.stairs(x_lminus_counts_SL,x_bin_edges,hatch="///",color=kit_green100,fill=True,label="semileptonic signal")
-plt.stairs(x_lminus_counts_AH,x_bin_edges,hatch="||",color=kit_green15,fill=True,label="allhadronic signal")
-plt.xticks(np.arange(0,1.1,0.1))
-plt.yscale("log")
-plt.yticks([1,10,10**2,10**3,10**4],label=["1","10",r"$10^2$",r"$10^3$",r"$10^4$"])
-plt.xlabel(r"$x$")
-plt.ylabel(r"Number of events")
-plt.legend()
-plt.title(r"Reduced energy for $l\in\{e^-,\mu^-\}$ after cuts")
-plt.savefig("/home/skeilbach/FCCee_topEWK/figures/ee_tt_SM_{}x_lminus_nod0.png".format(BSM_mod),dpi=300)
-plt.close()
-
-plt.stairs(cosTheta_lminus_counts_SL,cosTheta_bin_edges,hatch="///",color=kit_green100,fill=True,label="semileptonic signal")
-plt.stairs(cosTheta_lminus_counts_AH,cosTheta_bin_edges,hatch="||",color=kit_green15,fill=True,label="allhadronic signal")
-plt.xticks=(np.arange(-1,1.2,0.2))
-plt.yscale("log")
-plt.yticks([1,10,10**2,10**3,10**4],label=["1","10",r"$10^2$",r"$10^3$",r"$10^4$"])
-plt.xlabel(r"$\cos\theta$")
-plt.ylabel(r"Number of events")
-plt.legend()
-plt.title(r"Angular distribution for $l\in\{e^-,\mu^-\}$ after cuts")
-plt.savefig("/home/skeilbach/FCCee_topEWK/figures/ee_tt_SM_{}Theta_lminus_nod0.png".format(BSM_mod),dpi=300)
-plt.close()
-
 
 ###
 #Chi square fit
 ###
 
-
+'''
 #load histogrammed data from MC run with SM couplings
 path_SM = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_')
-d_i = np.load(path_SM/"lminus_hist_hadlep.npy")+np.load(path_SM/"lminus_hist_lephad.npy")+np.load(path_SM/"lminus_hist_hadhad.npy")
+n_SM = np.load(path_SM/"lminus_hist_hadlep.npy")+np.load(path_SM/"lminus_hist_lephad.npy")+np.load(path_SM/"lminus_hist_hadhad.npy")
 
 #Define data
-sigma_d_i = np.sqrt(d_i) #gaussian error on bins (central limit theorem applied to poisson dist)
-gaussian_noise = np.random.normal(0,sigma_d_i.reshape(-1),sigma_d_i.size).reshape(sigma_d_i.shape)
-n_SM = d_i #in this testing case d_i only contains SM value and is thus equal to n_SM
-n_i = d_i + gaussian_noise #produce "experimental data" by adding gaussian noise to the binned data. Use the std of each bin, i.e. sqrt(n_bin) to produce take as std for the normal distributed sample that the noise is being calculated -> bins with high uncertainty are more likely to have higher noise
+n_i = n_SM #assume in this case that the "experimental" data does not include BSM physics
 n_mod = np.load(path/"lminus_hist_hadlep.npy")+np.load(path/"lminus_hist_lephad.npy")+np.load(path/"lminus_hist_hadhad.npy")
 n_i,n_SM,n_mod = n_i.flatten(),n_SM.flatten(),n_mod.flatten()
 data = Namespace(n_i=n_i,n_SM=n_SM,n_mod=n_mod)
@@ -234,8 +236,8 @@ m.migrad()
 
 k_min = m.values["k"]
 k_std = m.errors["k"]
-power_min = math.floor(math.log10(abs(k_min)))
-power_std = math.floor(math.log10(abs(k_std)))
+power_min = int("{:.2e}".format(k_min).split('e')[1])
+power_std = int("{:.2e}".format(k_std).split('e')[1])
 #draw Delta chi2 profile
 Delta_chi2,k = m.profile("k",subtract_min=True)
 fig, ax = plt.subplots()
@@ -247,9 +249,10 @@ ax.set_ylim(0,3)
 ax.set_xlim(-2*k_std+k_min,2*k_std+k_min)
 ax.set_xlabel(r"$\delta$")
 ax.set_ylabel(r"$\Delta \chi^2$")
-plt.title(r"$\delta_{{\mathrm{{{}}}}}={:.2f}\cdot 10^{{{:+d}}}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(BSM_mod[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),power_min,k_std*math.pow(10,-power_std),power_std))
-plt.savefig("/home/skeilbach/FCCee_topEWK/figures/Delta_chi2_SM_{}_nod0.png".format(BSM_mod),dpi=300)
+#specify title format -> print 0 if k_min==0, otherwise k_min = x*10^y
+plt.title(r"$\delta_{{\mathrm{{{}}}}}={:.2f}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(BSM_mod[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),k_std*math.pow(10,-power_std),power_std)) if k_min==0 else plt.title(r"$\delta_{{\mathrm{{{}}}}}={:.2f}\cdot 10^{{{:+d}}}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(BSM_mod[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),power_min,k_std*math.pow(10,-power_std),power_std))
+plt.savefig("/home/skeilbach/FCCee_topEWK/figures/Delta_chi2_SM_{}.png".format(BSM_mod),dpi=300)
 plt.close()
-
+'''
 
 
