@@ -16,6 +16,11 @@ from cut_flow_functions import cut_flow,lxcosTheta,signal_eff_pur,events,df_load
 from pathlib import Path
 from sample_norms import N_expect
 from argparse import Namespace
+from scipy.signal import savgol_filter
+from __future__ import division
+import numpy
+import pylab
+from scipy.signal import convolve2d
 '''
 This code analyses the (x,cos(Theta)) distribution of muons originating from semileptonic decay of the t quark.
 Event selection cuts are applied to the data try to minimise background events e.g.from the semileptonic decay of B-mesons producing "fake leptons" to the semileptonic signal
@@ -25,7 +30,8 @@ Event selection cuts are applied to the data try to minimise background events e
 ###
 
 #specify BSM modification
-BSM_mod = [""] # ""for no modification,i.e. SM coupling
+BSM_mod = ["","ta_ttAdown_","ta_ttAup_","tv_ttAdown_","tv_ttAup_","vr_ttZup_","vr_ttZdown_"] # ""for no modification,i.e. SM coupling
+#BSM_mod = [""]
 
 #Define jet algo
 jet_algo = "kt_exactly6"
@@ -51,7 +57,7 @@ cut_limits = {"cut1": {"jet_algo":jet_algo},
 ntuples = ["tlepThad","thadTlep","thadThad"]
 chunks=["chunk0","chunk1","chunk2","chunk3","chunk4"]
 
-       
+'''       
 ###
 #Apply cut-flow to each decay channel and save the x and Theta values for later use
 ###
@@ -98,9 +104,14 @@ for BSM_coupling in BSM_mod:
         pickle.dump(xThetaR_dic,f)
     with open(path/'table_dic.pkl', 'wb') as f:
         pickle.dump(table_dic,f)
+'''
 
 #Define function that calculates optimal bin edges to bin x and cosTheta for either positive (=plus) or negative (=minus) leptons based upon the maximum values for x and cosTheta for all couplings, all decay channels that are considered and the number of bins that are fed into the function as lists or integers
 def calc_bin_edges(BSM_mod,decay_channel,lepton_charge,n_bins):
+    m_t = 173.34
+    s = 365**2
+    beta = np.sqrt(1-4*m_t**2/s)
+    x_lim = 2*120/m_t*np.sqrt((1-beta)/(1+beta))
     x_max,x_min = [],[]
     cosTheta_max,cosTheta_min = [],[]
     for coupling in BSM_mod:
@@ -118,28 +129,28 @@ def calc_bin_edges(BSM_mod,decay_channel,lepton_charge,n_bins):
         x_min.append(min(x_min_tmp))
         cosTheta_max.append(max(cosTheta_max_tmp))
         cosTheta_min.append(min(cosTheta_min_tmp))
-    x_bin_edges = np.linspace(min(x_min),max(x_max),n_bins+1)
+    x_bin_edges = np.linspace(min(x_min),x_lim,n_bins+1)
     cosTheta_bin_edges = np.linspace(min(cosTheta_min),max(cosTheta_max),n_bins+1)
     return x_bin_edges,cosTheta_bin_edges
 
 #Define function that returns either binned x or cosTheta data for a specific coupling with coupling, lepton charge and bin edges as input while saving the bin counts for later use
-def xcosTheta_hist(BSM_coupling,lepton_charge,decay_channels,x_bin_edges,cosTheta_bin_edges,projection):
-    path = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_{}'.format(coupling))
+def xcosTheta_hist(BSM_coupling,lepton_charge,decay_channel,x_bin_edges,cosTheta_bin_edges,projection):
+    path = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_{}'.format(BSM_coupling))
     tmp = {}
     with open(path/"xThetaR_dic.pkl","rb") as f:
         xThetaR_dic = pickle.load(f)
-    for channel in decay_channels:
+    for channel in decay_channel:
         x_channel = xThetaR_dic[channel]["x_l{}".format(lepton_charge)]
-        Theta_channel = xThetaR_dic[channel]["x_l{}".format(lepton_charge)]
+        Theta_channel = xThetaR_dic[channel]["Theta_l{}".format(lepton_charge)]
         R_channel = xThetaR_dic[channel]["R"]
-        counts,_,_ = np.histogram2d(x_channel,np.cos(Theta_channel),weights=np.full_like(x_channel, R_channel,dtype=np.double), bins=[x_bin_edges,cosTheta_bin_edges])
+        counts,_,_ = np.histogram2d(x_channel,np.cos(Theta_channel),weights=np.full_like(x_channel, R_channel,dtype=np.double), bins=(x_bin_edges,cosTheta_bin_edges))
         #save counts (important: as R_channel is dtype=float, counts contains non int values when scaled with R. Therefore a general,i.e. for all counts for all different couplings, conversion to int will be done when saving counts 
         np.save(path/"counts_l{}_{}".format(lepton_charge,channel),counts.astype(int))
         tmp[channel] = counts.astype(int)
     if projection=="x":
-        return tmp["tlepThad"][:, 0]+tmp["thadTlep"][:,0],tmp["thadThad"][:,0]
+        return np.sum(tmp["tlepThad"],axis=1)+np.sum(tmp["thadTlep"],axis=1),np.sum(tmp["thadThad"],axis=1)
     if projection=="cosTheta":
-        return tmp["tlepThad"][0,:]+tmp["thadTlep"][0,:],tmp["thadThad"][0,:]
+        return np.sum(tmp["tlepThad"],axis=0)+np.sum(tmp["thadTlep"],axis=0),np.sum(tmp["thadThad"],axis=0)
 
 
 ###
@@ -147,12 +158,13 @@ def xcosTheta_hist(BSM_coupling,lepton_charge,decay_channels,x_bin_edges,cosThet
 ###
 
 
-'''
+
 lepton_charge = ["minus","plus"]
 
 #Define custom colours
 kit_green100=(0,.59,.51)
 kit_green15=(.85,.93,.93)
+
 
 for BSM_coupling in BSM_mod:
     for charge in lepton_charge:
@@ -240,7 +252,8 @@ for BSM_coupling in BSM_mod:
 ###
 #Chi square fit (only for BSM_coupling!="")
 ###
-BSM_mod.remove("") #remove SM
+#BSM_mod.remove("") #remove SM
+BSM_mod = ["ta_ttAdown_"]
 
 for BSM_coupling in BSM_mod:
     for charge in lepton_charge:
@@ -251,7 +264,8 @@ for BSM_coupling in BSM_mod:
         #Define data
         n_i = n_SM #assume in this case that the "experimental" data does not include BSM physics
         n_mod = np.load(path/"counts_l{}_thadTlep.npy".format(charge))+np.load(path/"counts_l{}_tlepThad.npy".format(charge))+np.load(path/"counts_l{}_thadThad.npy".format(charge))
-        n_i,n_SM,n_mod = n_i.flatten(),n_SM.flatten(),n_mod.flatten()
+        #n_i,n_SM,n_mod = n_i.flatten(),n_SM.flatten(),n_mod.flatten()
+        n_i,n_SM,n_mod = np.sum(n_i,axis=0),np.sum(n_SM,axis=0),np.sum(n_mod,axis=0)
         #Define chi2 function with the fit parameter k so that for k=0 the experimental data represents the SM couplings 
         def chi2(k):
             return np.sum((n_i-(n_SM+k*(n_mod-n_SM)))**2/n_i)
@@ -278,7 +292,63 @@ for BSM_coupling in BSM_mod:
         #specify title format -> print 0 if k_min==0, otherwise k_min = x*10^y
         sign="+" if charge=="plus" else "-"
         plt.title(r"$\delta_{{\mathrm{{l^{{{}}},{}}}}}={:.2f}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(sign,BSM_coupling[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),k_std*math.pow(10,-power_std),power_std)) if k_min==0 else plt.title(r"$\delta_{{\mathrm{{{}}}}}={:.2f}\cdot 10^{{{:+d}}}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(BSM_coupling[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),power_min,k_std*math.pow(10,-power_std),power_std))
-        plt.savefig("/home/skeilbach/FCCee_topEWK/figures/Delta_chi2_SM_{}_l{}.png".format(BSM_coupling[:-1],sign),dpi=300)
+        #plt.savefig("/home/skeilbach/FCCee_topEWK/figures/Delta_chi2_SM_{}_l{}.png".format(BSM_coupling[:-1],sign),dpi=300)
+        plt.savefig("/home/skeilbach/test_DeltaChi2_cosTheta_{}.png".format(charge),dpi=300)
         plt.close()
-'''
+###
+#Plot (x,cosTheta) distribution for BSM = MOD - SM in the semileptonic channel (for positive and negative leptons) to compare with Patrick's plots for l^-
+###
+#BSM_scenario = ["","ta_ttAdown_","ta_ttAup_","tv_ttAdown_","tv_ttAup_","vr_ttZup_","vr_ttZdown_"]
+BSM_scenario = ["","ta_ttAdown_","tv_ttAup_"]
+
+def moving_average_2d(data, window):
+    """Moving average on two-dimensional data.
+    """
+    # Makes sure that the window function is normalized.
+    window /= window.sum()
+    # Makes sure data array is a numpy array or masked array.
+    if type(data).__name__ not in ['ndarray', 'MaskedArray']:
+        data = numpy.asarray(data)
+    # The output array has the same dimensions as the input data 
+    # (mode='same') and symmetrical boundary conditions are assumed
+    # (boundary='symm').
+    return convolve2d(data, window, mode='same', boundary='symm')
+
+win = numpy.ones((3,10))
+for BSM_coupling in BSM_scenario:
+    for charge in lepton_charge:
+        sign="+" if charge=="plus" else "-"
+        path = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_{}'.format(BSM_coupling))
+        path_SM = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_')
+        #load 2d (x,cosTheta) counts
+        counts_SM_SL = np.load(path_SM/"counts_l{}_thadTlep.npy".format(charge))+np.load(path_SM/"counts_l{}_tlepThad.npy".format(charge))
+        counts_mod_SL = np.load(path/"counts_l{}_thadTlep.npy".format(charge))+np.load(path/"counts_l{}_tlepThad.npy".format(charge))
+        #specify xpos,ypos and zpos to plot the distribution (x is equivalent to reduced energy axis and y to cosTheta axis)
+        xedges,yedges = calc_bin_edges(BSM_mod,["tlepThad","thadTlep"],charge,25)
+        xpos, ypos = np.meshgrid(yedges[:-1]+yedges[1:], xedges[:-1]+xedges[1:]) #use this specific slicing to ensure the x and y position of the bars in the plot is almost in the middle of the chosen bins
+        #xpos = xpos.flatten()/2.
+        #ypos = ypos.flatten()/2.
+        zpos = np.zeros_like (xpos)
+        dx = xedges [1] - xedges [0]
+        dy = yedges [1] - yedges [0]
+        dz = (counts_mod_SL-counts_SM_SL).flatten() if BSM_coupling!="" else counts_SM_SL.flatten()
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        if BSM_coupling=="":
+            #ax.bar3d(xpos, ypos, zpos, dx, dy, dz, zsort='average')
+            ax.plot_wireframe(xpos,ypos,moving_average_2d(counts_SM_SL,win))
+            ax.set_title(r"$(x,\cos\theta)$ distribution for $l^{{{}}}$".format(sign))
+        elif BSM_coupling!="":
+            #ax.bar3d(xpos, ypos, zpos, dx, dy, dz, zsort='average')
+            ax.plot_wireframe(xpos,ypos,moving_average_2d(counts_mod_SL-counts_SM_SL,win))
+            ax.set_title(r"$(x,\cos\theta)_{{\mathrm{{{}}}}}$ distribution for $l^{{{}}}$".format(BSM_coupling[:-1].replace("_", r"\_"),sign))
+        ax.set_xlabel(r"$\cos\theta$")
+        ax.set_ylabel(r"$x$")
+        ax.set_xticks([-1,0,1])
+        ax.set_yticks([0.2,0.4,0.6,0.8,1.])
+        ax.set_zlabel("frequency")
+        ax.set_zlim3d([np.min(dz),np.max(dz)])
+        ax.view_init(25,-35)
+        plt.savefig("/home/skeilbach/FCCee_topEWK/figures/xcosTheta_SM_{}l{}.png".format(BSM_coupling,charge))
+        plt.close()
 
