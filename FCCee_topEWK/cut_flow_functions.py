@@ -17,17 +17,35 @@ def compress_col(df_col,mask):
         tmp.append(list(compress(df_col[index], mask[i])))
     return tmp
 
+#Define function that only keeps those entries that are actual semileptonic events (according to the event function). This is done with genLepton_parentPDG information!
+def events_match(df,channel):
+    if (channel=="tlepThad")|(channel=="thadTlep"):
+        n_Wleptons = 1
+    if channel=="thadThad":
+        n_Wleptons = 0
+    Electron_Wplus = df["genElectron_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
+    Muon_Wplus = df["genMuon_parentPDG"].apply(lambda row: row.count(24)/2+row.count(6)/2)
+    Electron_Wminus = df["genElectron_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
+    Muon_Wminus = df["genMuon_parentPDG"].apply(lambda row: row.count(-24)/2+row.count(-6)/2)
+    Leptons_W = Electron_Wplus + Muon_Wplus + Electron_Wminus + Muon_Wminus
+    return df[Leptons_W==n_Wleptons]
+
 #Define df loader and Rescaling factor function
-def df_load(channel,BSM_mod):
-    filepath = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_{}_noCKMmix_keepPolInfo_{}ecm365.pkl".format(channel,BSM_mod)
-    df = pd.read_pickle(filepath)
+def df_load(channel,BSM_mod,chunk=None):
+    if chunk==None:
+        filepath = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_{}_noCKMmix_keepPolInfo_{}ecm365.pkl".format(channel,BSM_mod)
+    if chunk!=None:
+        filepath = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_{}_noCKMmix_keepPolInfo_{}ecm365/{}.pkl".format(channel,BSM_mod,chunk)
+    df = pd.read_pickle(filepath).sample(n=100000,ignore_index=True)
+    df = events_match(df,channel)
     N_exp = N_expect["wzp6_ee_SM_tt_{}_noCKMmix_keepPolInfo_{}ecm365".format(channel,BSM_mod)]
     if (channel=="tlepThad")|(channel=="thadTlep"):
         N_df = events(df,1)
     else:
         N_df = events(df,0)
-    R_df = N_exp/N_df
-    return df,R_df
+    return df,N_exp,N_df
+   
+
 
 '''
 Do not dabble with jet energies for now as kt_exactly6 jet algo is now being used where rejecting jets would hamper with later cut criteria, e.g. inverse W mass from two hadronic jet
@@ -261,13 +279,13 @@ def cut4(input_df,**kwargs):
     print("---cut4_{} applied!---".format(comparison))
     return df
 
-#cut5: require semileptonic candidate to have impact parameter d_0 < 0.1mm (+and d0signif = d_0/sqrt(d_0variance) < 50) while having E_l > 20 GeV
+#cut5: require semileptonic candidate to have impact parameter d_0 < 0.1mm (+and d0signif = d_0/sqrt(d_0variance) > 10) while having E_l > 20 GeV
 
 def PV_check(row_d0,row_d0signif,row_energy,d0,d0signif,p_lim):
     tmp = []
     if len(row_d0)!=0:
         for i,val in enumerate(row_d0):
-            tmp.append((val<d0)&(row_d0signif[i]<d0signif)&(row_energy[i]>p_lim))
+            tmp.append((np.abs(val)<d0)&(row_d0signif[i]<d0signif)&(row_energy[i]>p_lim))
     else:
         tmp.append(False)
     return tmp
@@ -291,6 +309,10 @@ def cut5(input_df,**kwargs):
     df = df[df["cut5"]]
     print("---cut5 applied!---")
     return df
+
+#cut6: Invariant mass from lepton and neutrino, i.e. ME
+
+
 
 ###
 #Calculate efficiency and purity of cut-flow
@@ -367,7 +389,7 @@ def signal_eff_pur(cut_dic,jet_algo,**kwargs):
     return table_SL,table_AH
 
 #Define cut-flow -> specify decay channel (because cut flow is applied to tlepThad,thadTlep and thadThad respectively)  -> apply cut flow to df iteratively and calculate number of allhadronic/semileptonic events that remain after each cut to later calculate eff and pur with these numbers
-def cut_flow(df,cut_dic,cut_limits_dic,decay_channel,R):
+def cut_flow(df,cut_dic,cut_limits_dic,decay_channel):
     table_s = [] #store amount of full hadronic/semileptonic signal events after each cut
     if (decay_channel=="tlepThad")|(decay_channel=="thadTlep"):
         n_Wleptons = 1
@@ -376,10 +398,10 @@ def cut_flow(df,cut_dic,cut_limits_dic,decay_channel,R):
     for cut_name in cut_dic:
         df = cut_dic[cut_name](df,**cut_limits_dic[cut_name])
         table_s.append(events(df,n_Wleptons))
-    return df,R*np.array(table_s)
+    return df,np.array(table_s)
 
 ###
-# apply filters and leptons
+#calculate energy and polar angle Theta for leptons
 ###
 
 def lxcosTheta(df):
@@ -409,52 +431,4 @@ def lxcosTheta(df):
     Theta_lplus,Theta_lminus = np.concatenate((Theta_eplus,Theta_muplus)), np.concatenate((Theta_eminus,Theta_muminus))
     x_lplus,x_lminus = np.concatenate((x_eplus,x_muplus)), np.concatenate((x_eminus,x_muminus))
     return x_lplus,x_lminus,Theta_lplus,Theta_lminus
-
-###
-#apply filters for genLeptons
-###
-
-#create mask for leptons originating from a W+ or W- (PDG code: +-24)
-def genMask(row):
-    row_bool = (np.abs(np.array(row)) == 24) | (np.abs(np.array(row)) == 6)
-    if(sum(row_bool)>1):
-        row_bool[np.where(row_bool==1)[0][1:]]=False #this deletes duplicated semileptonic muons or electrons 
-    return row_bool
-
-def LxcosTheta(df):
-    s = 365**2 #square of centre of mass energy in GeV
-    m_t = 173 #top mass in GeV
-    beta = np.sqrt(1-(4*m_t**2)/s) #top velocity
-    c_0 = constants.speed_of_light
-    df["pT_genElectron"] = np.sqrt(df["genElectron_px"]**2+df["genElectron_py"]**2)
-    df["pT_genMuon"] = np.sqrt(df["genMuon_px"]**2+df["genMuon_py"]**2)
-    df["Theta_genElectron"] = genTheta(df["pT_genElectron"],df["genElectron_pz"])
-    df["Theta_genMuon"] = genTheta(df["pT_genMuon"],df["genMuon_pz"])          
-    df["genElectron_ID_24"] = df["genElectron_parentPDG"].apply(lambda row: genMask(row)) 
-    df["genMuon_ID_24"] = df["genMuon_parentPDG"].apply(lambda row: genMask(row)) 
-    genElectron_mask = np.array(ak.flatten(df["genElectron_ID_24"]))
-    genMuon_mask = np.array(ak.flatten(df["genMuon_ID_24"]))
-    genElectron_charge = np.array(ak.flatten(df["genElectron_charge"]))
-    genMuon_charge = np.array(ak.flatten(df["genMuon_charge"]))
-    genElectron_plus = genElectron_mask & (genElectron_charge == 1)
-    genElectron_minus = genElectron_mask & (genElectron_charge == -1)
-    genMuon_plus = genMuon_mask & (genMuon_charge == 1)
-    genMuon_minus = genMuon_mask & (genMuon_charge == -1) 
-    #import arrays and apply masks
-    Theta_genElectron, genElectron_energy = np.array(ak.flatten(df["Theta_genElectron"])),np.array(ak.flatten(df["genElectron_energy"]))
-    Theta_genMuon, genMuon_energy = np.array(ak.flatten(df["Theta_genMuon"])), np.array(ak.flatten(df["genMuon_energy"]))
-    x_genElectron = 2*genElectron_energy/m_t*np.sqrt((1-beta)/(1+beta))
-    x_genMuon = 2*genMuon_energy/m_t*np.sqrt((1-beta)/(1+beta))
-    Theta_genEplus = Theta_genElectron[genElectron_plus]
-    Theta_genEminus = Theta_genElectron[genElectron_minus]
-    Theta_genMuplus = Theta_genMuon[genMuon_plus]
-    Theta_genMuminus = Theta_genMuon[genMuon_minus]
-    x_genEplus = x_genElectron[genElectron_plus]
-    x_genEminus = x_genElectron[genElectron_minus]
-    x_genMuplus = x_genMuon[genMuon_plus]
-    x_genMuminus = x_genMuon[genMuon_minus]
-    x_genLplus,x_genLminus = np.concatenate((x_genEplus,x_genMuplus)),np.concatenate((x_genEminus,x_genMuminus))
-    Theta_genLplus,Theta_genLminus = np.concatenate((Theta_genEplus,Theta_genMuplus)), np.concatenate((Theta_genEminus,Theta_genMuminus))
-    return x_genLplus,x_genLminus,Theta_genLplus,Theta_genLminus
-
  

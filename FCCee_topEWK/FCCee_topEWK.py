@@ -29,8 +29,8 @@ Event selection cuts are applied to the data try to minimise background events e
 ###
 
 #specify BSM modifications
-#top_EWK_scenario = ["","ta_ttAdown_","ta_ttAup_","tv_ttAdown_","tv_ttAup_","vr_ttZup_","vr_ttZdown_"] # ""for no modification,i.e. SM coupling
-top_EWK_scenario = ["","ta_ttAdown_"]
+top_EWK_scenario = ["","ta_ttAdown_","ta_ttAup_","tv_ttAdown_","tv_ttAup_","vr_ttZup_","vr_ttZdown_"] # ""for no modification,i.e. SM coupling
+#top_EWK_scenario = ["","ta_ttAdown_"]
 
 #Define jet algo
 jet_algo = "kt_exactly6"
@@ -88,7 +88,7 @@ for BSM_coupling in top_EWK_scenario:
                 df_chunk,table_chunk = cut_flow(df_chunk,cut_dic,cut_limits,channel)
                 #Calculate reduced energy x and polar angle Theta 
                 x_lplus_chunk,x_lminus_chunk,Theta_lplus_chunk,Theta_lminus_chunk = lxcosTheta(df_chunk)
-                #save # events before and after each cut and x/Theta values for each chunk
+                #events before and after each cut and x/Theta values for each chunk
                 x_lplus_channel.append(x_lplus_chunk);x_lminus_channel.append(x_lminus_chunk)
                 Theta_lplus_channel.append(Theta_lplus_chunk);Theta_lminus_channel.append(Theta_lminus_chunk)
                 table_channel += table_chunk
@@ -104,87 +104,6 @@ for BSM_coupling in top_EWK_scenario:
     with open(path/'table_dic.pkl', 'wb') as f:
         pickle.dump(table_dic,f)
 
-###
-#Determine optimal binning for 2D (x,cosTheta) distribution
-###
-
-#Calculate optimal binwidths which minimises the integrated mean squared error (IMSE), i.e. how well the histogram resembles the true underlying distribution. It was shown by Scott (Multivariate Density Estimation, 2015) that for normal distributed values of a sample of dimension d a useful formala to calculate binwidth h_k of data k is h_k~3.5*sigma_k*n^(-1/(2+d)) with the error sigma_k of the subsample k of size n. In case the two datasets are correlated h_k has to be modified to h_i=3.504*sigma_i*(1-rho^2)*n^(-1/4).
-m_t = 173.34
-s = 365**2
-beta = np.sqrt(1-4*m_t**2/s)
-x_lim = 2*120/m_t*np.sqrt((1-beta)/(1+beta)) #Define artifical upper limit for all x_values
-
-#Fit gaussian to (very likely normal distributed) energy distribution
-def gauss(x, a, x0, sigma):
-    return a * np.exp(-(x - x0) ** 2 / (2 * sigma ** 2))
-
-path_SM = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_')
-with open(path_SM/"xThetaR_dic.pkl","rb") as f:
-    xThetaR_dic = pickle.load(f)
-
-x,Theta,weights = [],[],[]
-N_x,N_cosTheta = 0,0 #expected number of events -> N_x = R_scaling*N_x,MC
-
-for channel in ntuples:
-    x_channel = xThetaR_dic[channel]["x_l{}".format(lepton_charge)]
-    Theta_channel = xThetaR_dic[channel]["Theta_l{}".format(lepton_charge)]
-    R_channel = xThetaR_dic[channel]["R"]
-    N_x += int(R_channel*len(x_channel));N_cosTheta += int(R_channel*len(Theta_channel))
-    x.append(x_channel)
-    Theta.append(Theta_channel)
-    weights.append(np.ones(len(x_channel))*R_channel)
-
-x = np.concatenate(x);Theta = np.concatenate(Theta);weights = np.concatenate(weights)
-#Dismiss outliers, i.e. entries with x>1
-Theta = Theta[x<=x_lim]
-weights = weights[x<=x_lim]
-x=x[x<=x_lim]
-
-#histogram reduced energy
-counts_x,xedges = np.histogram(x,bins="fd",density=True)
-fig = plt.figure()
-ax = fig.add_subplot(111)
-ax.stairs(counts_x,xedges,color=kit_green100,label="MC data")
-xpos = (xedges[:-1] + xedges[1:]) / 2
-
-popt, pcov = curve_fit(gauss,xpos,counts_x)
-gauss_fit = gauss(xpos,popt[0],popt[1],popt[2])
-ax.plot(xpos,gauss_fit,c="r",label="Gaussian fit")
-# these are matplotlib.patch.Patch properties
-props = dict(boxstyle='round', facecolor='white', alpha=0.5)
-# place a text box in upper left in axes coords
-textstr = '\n'.join((
-    r'$a=%.3f$' % (popt[0], ),
-    r'$\mu=%.3f$' % (popt[1], ),
-    r'$\sigma=%.3f$' % (popt[2], )))
-ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=14,
-        verticalalignment='top', bbox=props)
-ax.legend()
-ax.set_xlabel(r"x")
-ax.set_ylabel(r"Number of events")
-ax.set_title(r"Gaussian fit to reduced energy projection of MC_data for SM scenario")
-fig.savefig("/home/skeilbach/FCCee_topEWK/figures/x_gaussian_fit.png",dpi=300)
-plt.close()
-
-#Use gained std of almost normal distributed x projection to calculate optimal binwidth
-rho,_ = spearmanr(x,np.cos(Theta)) #calculate correlation between x and cosTheta data
-h_k = 3.504*popt[2]*np.sqrt(len(x)/N_x)*(1-rho**2)**(3/8)*(N_x+N_cosTheta)**(-1/4) #optimal binwidth for correlated data#Note: h_k is ~10.5 so at least 11 bins for x
-
-#cosTheta is far from normal distributed -> choose arbitrary n_bins=20
-#now optimise n_bins for x axis by demanding that the minimum bin entry must not be <20 
-yedges = np.histogram_bin_edges(np.cos(Theta),bins=20)
-b=100
-n_bins=24
-xedges=(np.linspace(np.min(x)**(1/b), np.max(x)**(1/b),n_bins+1))**b #has more densely spaced bins for small x, i.e. where there is more data
-counts,_,_ = np.histogram2d(x,np.cos(Theta),weights=weights,bins=(xedges,yedges))
-counts=counts.astype(int)
-while(np.any(counts.astype(int)<20)):
-    n_bins -= 1
-    xedges=(np.linspace(np.min(x)**(1/b), np.max(x)**(1/b),n_bins))**b
-    counts,_,_ = np.histogram2d(x,np.cos(Theta),weights=weights,bins=(xedges,yedges))
-    counts=counts.astype(int)
-
-print(n_bins)
 '''
 
 ###
@@ -216,10 +135,59 @@ def calc_bin_edges(top_EWK_scenario,ntuples,lepton_charge,n_bins_x,n_bins_cosThe
         cosTheta_max.append(max(cosTheta_max_tmp))
         cosTheta_min.append(min(cosTheta_min_tmp))
     b=100 #Use same b value as was used when calculating optimal binwidth
-    xedges=(np.linspace(max(x_min)**(1/b), x_lim**(1/b),n_bins_x+1))**b
+    xedges=(np.linspace(max(x_min)**(1/b), x_lim**(1/b),n_bins_x+1))**b #has more densely spaced bins for small x, i.e. where there is more data
     yedges = np.linspace(max(cosTheta_min),min(cosTheta_max),n_bins_cosTheta+1)
     return xedges,yedges
 
+'''
+###
+#Determine optimal binning for 2D (x,cosTheta) distribution
+###
+
+#Calculate optimal binwidths which minimises the integrated mean squared error (IMSE), i.e. how well the histogram resembles the true underlying distribution. It was shown by Scott (Multivariate Density Estimation, 2015) that for normal distributed values of a sample of dimension d a useful formala to calculate binwidth h_k of data k is h_k~3.5*sigma_k*n^(-1/(2+d)) with the error sigma_k of the subsample k of size n. In case the two datasets are correlated h_k has to be modified to h_i=3.504*sigma_i*(1-rho^2)*n^(-1/4).
+m_t = 173.34
+s = 365**2
+beta = np.sqrt(1-4*m_t**2/s)
+x_lim = 2*120/m_t*np.sqrt((1-beta)/(1+beta)) #Define artifical upper limit for all x_values
+
+path_SM = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_')
+with open(path_SM/"xThetaR_dic.pkl","rb") as f:
+    xThetaR_dic = pickle.load(f)
+
+x,Theta,weights = [],[],[]
+N_x,N_cosTheta = 0,0 #expected number of events -> N_x = R_scaling*N_x,MC
+
+for channel in ntuples:
+    x_channel = xThetaR_dic[channel]["x_l{}".format(lepton_charge)]
+    Theta_channel = xThetaR_dic[channel]["Theta_l{}".format(lepton_charge)]
+    R_channel = xThetaR_dic[channel]["R"]
+    N_x += int(R_channel*len(x_channel));N_cosTheta += int(R_channel*len(Theta_channel))
+    x.append(x_channel)
+    Theta.append(Theta_channel)
+    weights.append(np.ones(len(x_channel))*R_channel)
+
+x = np.concatenate(x);Theta = np.concatenate(Theta);weights = np.concatenate(weights)
+#Dismiss outliers, i.e. entries with x>1
+Theta = Theta[x<=x_lim]
+weights = weights[x<=x_lim]
+x=x[x<=x_lim]
+
+#cosTheta is far from normal distributed -> choose arbitrary n_bins=20
+#now optimise n_bins for x axis by demanding that the minimum bin entry must not be <20 
+b=100
+n_bins_x = 24
+xedges,yedges = calc_bin_edges(top_EWK_scenario,ntuples,n_bins_x,20)
+b=100
+counts,_,_ = np.histogram2d(x,np.cos(Theta),weights=weights,bins=(xedges,yedges))
+counts=counts.astype(int)
+while(np.any(counts.astype(int)<20)):
+    n_bins_x -= 1
+    xedges,yedges = calc_bin_edges(top_EWK_scenario,ntuples,n_bins_x,20)
+    counts,_,_ = np.histogram2d(x,np.cos(Theta),weights=weights,bins=(xedges,yedges))
+    counts=counts.astype(int)
+
+print(n_bins)
+'''
 
 #Define function that returns either binned x or cosTheta data for a specific coupling with coupling, lepton charge and bin edges
 def xcosTheta_hist(coupling,lepton_charge,decay_channel,x_bin_edges,cosTheta_bin_edges,projection=None):
@@ -241,41 +209,19 @@ def xcosTheta_hist(coupling,lepton_charge,decay_channel,x_bin_edges,cosTheta_bin
             output += np.sum(counts_channel.astype(int),axis=0)
     return output
 
-'''
-#Define custom std deviation
-def std_scaled(coupling,ntuples,lepton_charge):
-    path = Path('/home/skeilbach/FCCee_topEWK/arrays/SM_{}'.format(coupling))
-    N_x,N_cosTheta = 0,0
-    x,Theta = [],[]
-    with open(path/"xThetaR_dic.pkl","rb") as f:
-        xThetaR_dic = pickle.load(f)
-    for channel in ntuples:
-        x_channel = xThetaR_dic[channel]["x_l{}".format(lepton_charge)]
-        Theta_channel = xThetaR_dic[channel]["Theta_l{}".format(lepton_charge)]
-        R_channel = xThetaR_dic[channel]["R"]
-        N_x += int(R_channel*len(x_channel));N_cosTheta += int(R_channel*len(Theta_channel))
-        x.append(x_channel)
-        Theta.append(Theta_channel)
-    x = np.concatenate(x);Theta = np.concatenate(Theta)
-    #compute rescaled std
-    std_x = np.sqrt(1/(N_x-1)*np.sum((x-np.mean(x))**2))
-    std_cosTheta = np.sqrt(1/(N_cosTheta-1)*np.sum((np.cos(Theta)-np.mean(np.cos(Theta)))**2))
-    return std_x,std_cosTheta
-'''
-
 ###
 #Plot the x and cosTheta projections and Delta(BSM-SM) plots for negative and positive leptons
 ###
 
 
 
-lepton_charge = ["minus","plus"]
+lepton_charge = ["minus"]
 
 #Define custom colours
 kit_green100=(0,.59,.51)
 kit_green15=(.85,.93,.93)
 
-
+'''
 for BSM_coupling in top_EWK_scenario:
     for charge in lepton_charge:
         #Define proper bin edges
@@ -363,6 +309,7 @@ for BSM_coupling in top_EWK_scenario:
         plt.savefig("/home/skeilbach/FCCee_topEWK/figures/ee_tt_SM_{}cosTheta_l{}.png".format(BSM_coupling,charge),dpi=300)
         plt.close()
 
+
 ###
 #Chi square fit (only for BSM_coupling!="")
 ###
@@ -404,7 +351,7 @@ for BSM_coupling in top_EWK_scenario_fit:
         plt.title(r"$\delta_{{\mathrm{{l^{{{}}},{}}}}}={:.2f}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(sign,BSM_coupling[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),k_std*math.pow(10,-power_std),power_std)) if k_min==0 else plt.title(r"$\delta_{{\mathrm{{{}}}}}={:.2f}\cdot 10^{{{:+d}}}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(BSM_coupling[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),power_min,k_std*math.pow(10,-power_std),power_std))
         plt.savefig("/home/skeilbach/FCCee_topEWK/figures/Delta_Chi2_SM_{}_l{}.png".format(BSM_coupling[:-1],charge),dpi=300)
         plt.close()
-
+'''
 ###
 #Plot (x,cosTheta) distribution for BSM = MOD - SM in the semileptonic channel (for positive and negative leptons) to compare with Patrick's plots for l^-
 ###
@@ -423,12 +370,21 @@ def moving_average_2d(data, window):
     # (boundary='symm').
     return convolve2d(data, window, mode='same', boundary='symm')
 
+#Define scaling factor to translate 2D distribution proportional to the cross section to Patricks's form functions f_i(x,cosTheta):
+m_t = 173.34
+s = 365**2
+beta = np.sqrt(1-4*m_t**2/s)
+epsilon = 0.47
+alpha_EM = 1/137
+lumi_int = 2.5*10**(-50)
+
+
 win = numpy.ones((6,20))
 for BSM_coupling in top_EWK_scenario:
     for charge in lepton_charge:
         sign="+" if charge=="plus" else "-"
         #calculate 2d (x,cosTheta) counts
-        xedges,yedges = calc_bin_edges(top_EWK_scenario,["tlepThad","thadTlep"],charge,25,25)
+        xedges,yedges = calc_bin_edges(top_EWK_scenario,["tlepThad","thadTlep"],charge,30,30)
         counts_SM_SL = xcosTheta_hist("",charge,["tlepThad","thadTlep"],xedges,yedges)
         counts_mod_SL = xcosTheta_hist(BSM_coupling,charge,["tlepThad","thadTlep"],xedges,yedges)
         #specify xpos,ypos and zpos to plot the distribution (x is equivalent to reduced energy axis and y to cosTheta axis)
@@ -442,11 +398,11 @@ for BSM_coupling in top_EWK_scenario:
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
         if BSM_coupling=="":
-            ax.plot_surface(xpos, ypos,moving_average_2d(counts_SM_SL,win),color= "blue")
+            ax.plot_surface(xpos, ypos,moving_average_2d(counts_SM_SL*2*s/(3*np.pi*beta*alpha_EM**2*0.44*counts_SM_SL.sum()),win),color= "blue")
             #ax.plot_wireframe(xpos,ypos,moving_average_2d(counts_SM_SL,win),rstride=1,cstride=1)
             ax.set_title(r"$(x,\cos\theta)_{{\mathrm{{SM}}}}$ distribution for $l^{{{}}}$".format(sign))
         elif BSM_coupling!="":
-            ax.plot_surface(xpos, ypos,moving_average_2d(counts_mod_SL-counts_SM_SL,win), color= "blue")
+            ax.plot_surface(xpos, ypos,moving_average_2d((counts_mod_SL-counts_SM_SL)*2*s/(3*np.pi*beta*alpha_EM**2*0.44*(counts_mod_SL-counts_SM_SL).sum()),win), color= "blue")
             #ax.plot_wireframe(xpos,ypos,moving_average_2d(counts_mod_SL-counts_SM_SL,win),rstride=1,cstride=1)
             ax.set_title(r"$(x,\cos\theta)_{{\mathrm{{{}}}}}$ distribution for $l^{{{}}}$".format(BSM_coupling[:-1].replace("_", r"\_"),sign))
         ax.set_xlabel(r"$\cos\theta$")
