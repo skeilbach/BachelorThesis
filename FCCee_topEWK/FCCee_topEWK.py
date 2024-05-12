@@ -21,16 +21,24 @@ from scipy.signal import convolve2d
 from scipy.optimize import curve_fit 
 from scipy.stats import spearmanr
 '''
-This code analyses the (x,cos(Theta)) distribution of muons originating from semileptonic decay of the t quark.
-Event selection cuts are applied to the data try to minimise background events e.g.from the semileptonic decay of B-mesons producing "fake leptons" to the semileptonic signal
+This code analyses the (x,cos(Theta)) distribution of leptons (i.e. electrons or muons)  originating from semileptonic top decay produced in a WHIZARD, PYTHIA and simulated with DELPHES IDEA detector card. It aims to estimate the potential precision on top quark electroweak couplings at the FCC-ee. The code consists of the following steps:
+1. Load data and apply cuts -> save x and Theta values for later use
+2. Determine "optimal" binning by hand
+3. Plot x,cosTheta distribution -> shape difference between SM and BSM scenario genuine or only due to statistical noise?
+4. Delta Chi2 fit to calculate precision on WHIZARD parameters
+
+All functions not found in this script are stored separately in "cut_flow_functions.py"
+The additional event selection optimisation procedure is not performed here but in "FCCee_cut_flow.py" 
+The code is written to be "modular", i.e. code not needed at the time can be easily commented out
+NOTE: This script has not been optimised with regards to run time. The event selection takes some 8 hours for 3 ntuples containing 6M events each!
 '''
+
 ###
 #Import data
 ###
 
 #specify BSM modifications
 top_EWK_scenario = ["","ta_ttAdown_","ta_ttAup_","tv_ttAdown_","tv_ttAup_","vr_ttZup_","vr_ttZdown_"] # ""for no modification,i.e. SM coupling
-#top_EWK_scenario = ["","ta_ttAdown_"]
 
 #Define jet algo
 jet_algo = "kt_exactly6"
@@ -56,7 +64,7 @@ cut_limits = {"cut1": {"jet_algo":jet_algo},
 ntuples = ["tlepThad","thadTlep","thadThad"]
 chunks=["chunk0","chunk1","chunk2","chunk3","chunk4"]
 
-'''       
+
 ###
 #Apply cut-flow to each decay channel and save the x and Theta values for later use
 ###
@@ -104,7 +112,6 @@ for BSM_coupling in top_EWK_scenario:
     with open(path/'table_dic.pkl', 'wb') as f:
         pickle.dump(table_dic,f)
 
-'''
 
 ###
 #Optimal Binning results
@@ -209,19 +216,19 @@ def xcosTheta_hist(coupling,lepton_charge,decay_channel,x_bin_edges,cosTheta_bin
             output += np.sum(counts_channel.astype(int),axis=0)
     return output
 
+
+
 ###
 #Plot the x and cosTheta projections and Delta(BSM-SM) plots for negative and positive leptons
 ###
 
-
-
-lepton_charge = ["minus"]
+lepton_charge = ["minus"] #specify the charge of the leptons used to create the x,cosTheta histograms
 
 #Define custom colours
 kit_green100=(0,.59,.51)
 kit_green15=(.85,.93,.93)
 
-'''
+
 for BSM_coupling in top_EWK_scenario:
     for charge in lepton_charge:
         #Define proper bin edges
@@ -351,14 +358,16 @@ for BSM_coupling in top_EWK_scenario_fit:
         plt.title(r"$\delta_{{\mathrm{{l^{{{}}},{}}}}}={:.2f}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(sign,BSM_coupling[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),k_std*math.pow(10,-power_std),power_std)) if k_min==0 else plt.title(r"$\delta_{{\mathrm{{{}}}}}={:.2f}\cdot 10^{{{:+d}}}\pm{:.4f}\cdot 10^{{{:+d}}}$".format(BSM_coupling[:-1].replace("_", r"\_"), k_min*math.pow(10,-power_min),power_min,k_std*math.pow(10,-power_std),power_std))
         plt.savefig("/home/skeilbach/FCCee_topEWK/figures/Delta_Chi2_SM_{}_l{}.png".format(BSM_coupling[:-1],charge),dpi=300)
         plt.close()
+
 '''
 ###
-#Plot (x,cosTheta) distribution for BSM = MOD - SM in the semileptonic channel (for positive and negative leptons) to compare with Patrick's plots for l^-
+#Plot (x,cosTheta) distribution for BSM = MOD - SM in the semileptonic channel (for positive and negative leptons)
 ###
 #BSM_scenario = ["","ta_ttAdown_","ta_ttAup_","tv_ttAdown_","tv_ttAup_","vr_ttZup_","vr_ttZdown_"]
 
 def moving_average_2d(data, window):
-    """Moving average on two-dimensional data.
+    """
+    Moving average on two-dimensional data.
     """
     # Makes sure that the window function is normalized.
     window /= window.sum()
@@ -369,15 +378,6 @@ def moving_average_2d(data, window):
     # (mode='same') and symmetrical boundary conditions are assumed
     # (boundary='symm').
     return convolve2d(data, window, mode='same', boundary='symm')
-
-#Define scaling factor to translate 2D distribution proportional to the cross section to Patricks's form functions f_i(x,cosTheta):
-m_t = 173.34
-s = 365**2
-beta = np.sqrt(1-4*m_t**2/s)
-epsilon = 0.47
-alpha_EM = 1/137
-lumi_int = 2.5*10**(-50)
-
 
 win = numpy.ones((6,20))
 for BSM_coupling in top_EWK_scenario:
@@ -415,4 +415,4 @@ for BSM_coupling in top_EWK_scenario:
         ax.view_init(25,-35)
         plt.savefig("/home/skeilbach/FCCee_topEWK/figures/xcosTheta_SM_{}l{}.png".format(BSM_coupling,charge),dpi=300)
         plt.close()
-
+'''

@@ -1,4 +1,3 @@
-#this file is solely dedicated on improving the cut-flow by plotting efficiency and purity for different upper or lower cuts on observables (e.g. momenta, ME, etc.) to find the best value to cut 
 import numpy as np
 import pickle
 import pandas as pd
@@ -10,6 +9,12 @@ from scipy import constants
 from sample_norms import N_expect
 from pathlib import Path
 from cut_flow_functions import events_match,events,cut1,cut2,cut3,cut4,cut5,calc_p,df_filter
+
+'''
+This file is solely dedicated on improving the event selection, i.e. finding the best cut limits to achieve a high purity while retaing as many signal events as possible. For this, the different possible values for upper/lower cut limits are applied to observables (e.g. leading lepton momenta, ME,...) in an iterative process to the data while purity and efficiency are calculated each time to identify the best value to use as a cut limit
+
+NOTE: At a later point in the script the eff/pur tables for the cut on ME and leading lepton momenta are denoted as "cut5" and "cut4_>/<" respectively. This is solely due to the fact that in the first preliminary event selection a cut on the ME was performed after a constraint on the lepton momentum.
+'''
 
 #Define data loader
 def df_load(channel,BSM_mod,chunk=None):
@@ -205,7 +210,7 @@ for cut_name in cuts:
     plt.close()
 
 ###
-#Plot results for cut5
+#Plot results for PV selection (cut5)
 ###
 
 #unpack x,y and z values for eff and pur
