@@ -7,6 +7,10 @@ from scipy import constants
 from itertools import compress
 from sample_norms import N_expect
 
+'''
+This file contains all functions needed for applying the event selection in the main "FCCee_topEWK.py" file. 
+'''
+
 ###
 #Define cuts for cut-flow
 ###
@@ -30,7 +34,7 @@ def events_match(df,channel):
     Leptons_W = Electron_Wplus + Muon_Wplus + Electron_Wminus + Muon_Wminus
     return df[Leptons_W==n_Wleptons]
 
-#Define df loader and Rescaling factor function
+#Define df loader specifying the amount of events n that should be loaded. The function also yields the variables N_exp/N_df necessary to calculate the rescaling factors for each ntuple
 def df_load(channel,BSM_mod,chunk=None):
     if chunk==None:
         filepath = "/ceph/skeilbach/FCCee_topEWK/wzp6_ee_SM_tt_{}_noCKMmix_keepPolInfo_{}ecm365.pkl".format(channel,BSM_mod)
@@ -237,6 +241,7 @@ def cut2(input_df,n_btag,jet_algo):
     print("---cut2 applied!---")
     return df
 '''
+
 #cut3: ME cut (to filter out "fake" lepton events where a pi0 contained in a jet may deposit most of its energy in the ECAL faking the signature of a lepton - however without the necessary MET that is associated with the semileptonic decay of the W boson into a lepton and a neutrino)
 def cut3(input_df,**kwargs):
     ME_cut = kwargs["ME_cut"]
